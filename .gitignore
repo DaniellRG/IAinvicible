@@ -1,0 +1,19 @@
+# Datos privados
+history/
+config.json
+error.log
+
+# Builds
+dist/
+build/
+*.exe
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+python_embed/
+.venv/
+
+# Soporte portable (copia lista)
+portable/
