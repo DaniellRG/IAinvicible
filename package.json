@@ -5,7 +5,7 @@
     "iainvisible": "bin.js"
   },
   "scripts": {
-    "postinstall": "node install.js"
+    "prepare": "node install.js"
   },
   "license": "UNLICENSED"
 }
