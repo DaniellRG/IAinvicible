@@ -15,5 +15,9 @@ __pycache__/
 python_embed/
 .venv/
 
+# Node
+node_modules/
+npm-debug.log*
+
 # Soporte portable (copia lista)
 portable/

@@ -1,0 +1,11 @@
+{
+  "name": "iainvisible",
+  "version": "1.0.0",
+  "bin": {
+    "iainvisible": "bin.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "license": "UNLICENSED"
+}
