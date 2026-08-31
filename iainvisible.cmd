@@ -2,6 +2,8 @@
 cd /d "%~dp0"
 
 set "PYW="
+if exist "%~dp0python_embed\pythonw.exe" set "PYW=%~dp0python_embed\pythonw.exe"
+if "%PYW%"=="" if exist "%~dp0python_embed\python.exe" set "PYW=%~dp0python_embed\python.exe"
 if exist "%~dp0..\..\pythonw.exe" set "PYW=%~dp0..\..\pythonw.exe"
 
 if "%PYW%"=="" if exist "%LOCALAPPDATA%\Programs\Python\Python314\pythonw.exe" set "PYW=%LOCALAPPDATA%\Programs\Python\Python314\pythonw.exe"
