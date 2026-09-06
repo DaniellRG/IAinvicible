@@ -1,6 +1,17 @@
-import requests
 import json
 from typing import Generator, Optional
+
+import requests
+
+from .errors import (
+    ProviderConnectionError,
+    ProviderHTTPError,
+    ProviderTimeout,
+    with_retries,
+)
+
+DEFAULT_TIMEOUT = 120
+SHORT_TIMEOUT = 5
 
 
 class OllamaClient:
@@ -10,14 +21,14 @@ class OllamaClient:
 
     def is_available(self) -> bool:
         try:
-            resp = self.session.get(f"{self.base_url}/api/tags", timeout=3)
+            resp = self.session.get(f"{self.base_url}/api/tags", timeout=SHORT_TIMEOUT)
             return resp.status_code == 200
         except Exception:
             return False
 
     def list_models(self) -> list[dict]:
         try:
-            resp = self.session.get(f"{self.base_url}/api/tags", timeout=5)
+            resp = self.session.get(f"{self.base_url}/api/tags", timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 models = []
@@ -28,8 +39,12 @@ class OllamaClient:
                         "modified": m.get("modified_at", ""),
                     })
                 return models
+            raise ProviderHTTPError(resp.status_code, resp.text[:200])
+        except (ProviderConnectionError, ProviderTimeout):
             return []
-        except Exception:
+        except ProviderHTTPError:
+            return []
+        except requests.RequestException as e:
             return []
 
     def pull_model(self, model_name: str) -> Generator[str, None, None]:
@@ -38,81 +53,126 @@ class OllamaClient:
                 f"{self.base_url}/api/pull",
                 json={"name": model_name},
                 stream=True,
-                timeout=300
+                timeout=300,
             )
+            if resp.status_code != 200:
+                raise ProviderHTTPError(resp.status_code, resp.text[:200])
             for line in resp.iter_lines():
                 if line:
                     data = json.loads(line)
                     status = data.get("status", "")
-                    yield status
+                    if status:
+                        yield status
         except Exception as e:
-            yield f"Error: {str(e)}"
+            raise ProviderConnectionError(str(e)) from e
 
-    def chat(self, model: str, messages: list[dict], stream: bool = True) -> Generator[str, None, None]:
-        try:
-            payload = {
-                "model": model,
-                "messages": messages,
-                "stream": stream
-            }
-            resp = self.session.post(
+    def chat(
+        self,
+        model: str,
+        messages: list[dict],
+        stream: bool = True,
+        options: Optional[dict] = None,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> Generator[str, None, None]:
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": stream,
+        }
+        if options:
+            payload["options"] = options
+
+        def _request():
+            return self.session.post(
                 f"{self.base_url}/api/chat",
                 json=payload,
                 stream=stream,
-                timeout=120
+                timeout=timeout,
             )
+
+        try:
+            resp = with_retries(_request)
+            if resp.status_code != 200:
+                raise ProviderHTTPError(resp.status_code, resp.text[:200])
+
             if stream:
                 for line in resp.iter_lines():
-                    if line:
-                        data = json.loads(line)
-                        content = data.get("message", {}).get("content", "")
-                        done = data.get("done", False)
-                        if content:
-                            yield content
-                        if done:
-                            return
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    content = data.get("message", {}).get("content", "")
+                    done = data.get("done", False)
+                    if content:
+                        yield content
+                    if done:
+                        return
             else:
                 data = resp.json()
                 content = data.get("message", {}).get("content", "")
                 yield content
+        except ProviderHTTPError:
+            raise
         except Exception as e:
-            yield f"Error de conexion con Ollama: {str(e)}"
+            if isinstance(e, requests.Timeout):
+                raise ProviderTimeout(str(e)) from e
+            raise ProviderConnectionError(str(e)) from e
 
-    def generate(self, model: str, prompt: str, stream: bool = True) -> Generator[str, None, None]:
-        try:
-            payload = {
-                "model": model,
-                "prompt": prompt,
-                "stream": stream
-            }
-            resp = self.session.post(
+    def generate(
+        self,
+        model: str,
+        prompt: str,
+        stream: bool = True,
+        options: Optional[dict] = None,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> Generator[str, None, None]:
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "stream": stream,
+        }
+        if options:
+            payload["options"] = options
+
+        def _request():
+            return self.session.post(
                 f"{self.base_url}/api/generate",
                 json=payload,
                 stream=stream,
-                timeout=120
+                timeout=timeout,
             )
+
+        try:
+            resp = with_retries(_request)
+            if resp.status_code != 200:
+                raise ProviderHTTPError(resp.status_code, resp.text[:200])
+
             if stream:
                 for line in resp.iter_lines():
-                    if line:
-                        data = json.loads(line)
-                        content = data.get("response", "")
-                        done = data.get("done", False)
-                        if content:
-                            yield content
-                        if done:
-                            return
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    content = data.get("response", "")
+                    done = data.get("done", False)
+                    if content:
+                        yield content
+                    if done:
+                        return
             else:
                 data = resp.json()
                 yield data.get("response", "")
+        except ProviderHTTPError:
+            raise
         except Exception as e:
-            yield f"Error de conexion con Ollama: {str(e)}"
+            if isinstance(e, requests.Timeout):
+                raise ProviderTimeout(str(e)) from e
+            raise ProviderConnectionError(str(e)) from e
 
     def get_model_info(self, model_name: str) -> Optional[dict]:
         try:
             resp = self.session.post(
                 f"{self.base_url}/api/show",
                 json={"name": model_name},
-                timeout=10
+                timeout=10,
             )
             if resp.status_code == 200:
                 return resp.json()

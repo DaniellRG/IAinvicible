@@ -11,6 +11,7 @@ class InputBar(QWidget):
     message_sent = pyqtSignal(str)
     file_attached = pyqtSignal(str)
     image_attached = pyqtSignal(str, object)
+    stop_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -65,7 +66,16 @@ class InputBar(QWidget):
         self.send_button.setFixedSize(44, 44)
         self.send_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.send_button.clicked.connect(self._send_message)
+
+        self.stop_button = QPushButton("\u25A0")
+        self.stop_button.setObjectName("stop_button")
+        self.stop_button.setFixedSize(44, 44)
+        self.stop_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.stop_button.setToolTip("Detener generacion (Esc)")
+        self.stop_button.clicked.connect(self.stop_requested.emit)
+        self.stop_button.hide()
         input_row.addWidget(self.send_button)
+        input_row.addWidget(self.stop_button)
 
         layout.addLayout(input_row)
 
@@ -177,3 +187,6 @@ class InputBar(QWidget):
         self.send_button.setEnabled(enabled)
         self.image_btn.setEnabled(enabled)
         self.attach_btn.setEnabled(enabled)
+
+    def show_stop(self, show: bool):
+        self.stop_button.setVisible(show)

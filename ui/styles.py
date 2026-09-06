@@ -179,6 +179,20 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
     color: #4a5568;
 }
 
+#stop_button {
+    background-color: #1e2a3a;
+    color: #f87171;
+    border: 2px solid #7f1d1d;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+#stop_button:hover {
+    background-color: #2a1418;
+    border-color: #ef4444;
+}
+
 #attach_btn, #image_btn {
     background-color: transparent;
     color: #6b7a90;
@@ -580,6 +594,20 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
 #send_button:disabled {
     background-color: #e2e8f0;
     color: #94a3b8;
+}
+
+#stop_button {
+    background-color: #f1f5f9;
+    color: #dc2626;
+    border: 2px solid #fca5a5;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+#stop_button:hover {
+    background-color: #fee2e2;
+    border-color: #dc2626;
 }
 
 #attach_btn, #image_btn {

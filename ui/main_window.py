@@ -77,6 +77,9 @@ class AIWorker(QThread):
     def run(self):
         try:
             for chunk in self.engine.send_message(self.message, self.files):
+                if self.isInterruptionRequested():
+                    self.finished.emit()
+                    return
                 self.chunk_received.emit(chunk)
             self.finished.emit()
         except Exception as e:
@@ -388,6 +391,8 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.model_worker = None
         self._pending_files = []
+        self._busy = False
+        self._cancel_requested = False
         self._is_visible = True
         self._auto_hide_enabled = True
         self._auto_hide_seconds = 15
@@ -455,6 +460,7 @@ class MainWindow(QMainWindow):
         self.input_bar.message_sent.connect(self._on_send_message)
         self.input_bar.file_attached.connect(self._on_file_attached)
         self.input_bar.image_attached.connect(self._on_image_attached)
+        self.input_bar.stop_requested.connect(self._cancel_generation)
         right_layout.addWidget(self.input_bar)
 
         self.splitter.addWidget(right_panel)
@@ -462,7 +468,14 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(self.splitter)
 
-        self.chat.add_message("Hola! Selecciona un modelo de IA y escribe tu mensaje.", is_user=False)
+        self.chat.add_message(
+            "Bienvenido! Selecciona un modelo de IA y escribe tu mensaje.\n\n"
+            "Atajos:\n  F4  Exportar conversacion (.md)\n"
+            "  F5  Actualizar modelos\n  F6  Configurar API Key\n"
+            "  F7  Nueva conversacion\n  F8  Auto-hide on/off\n"
+            "  F9  Alternar tema\n  F10 Modo compacto\n  Esc Detener generacion",
+            is_user=False
+        )
 
     def _apply_anti_capture(self):
         self.show()
@@ -499,9 +512,12 @@ class MainWindow(QMainWindow):
             self._auto_hide_timer.start(self._auto_hide_seconds * 1000)
 
     def _auto_hide(self):
-        if self._is_visible and self._auto_hide_enabled and not self.worker:
+        if self._is_visible and self._auto_hide_enabled and not self._busy:
             self.setWindowOpacity(0.0)
             self._is_hidden_by_auto = True
+
+    def _set_busy(self, busy: bool):
+        self._busy = busy
 
     def _reset_auto_hide(self):
         if self._is_hidden_by_auto:
@@ -712,7 +728,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(200, self._check_model_ready)
 
     def _on_send_message(self, text: str):
-        if self.worker and self.worker.isRunning():
+        if self._busy:
             return
 
         files_content = []
@@ -724,7 +740,10 @@ class MainWindow(QMainWindow):
 
         self.chat.add_message(text, is_user=True)
 
+        self._set_busy(True)
+        self._cancel_requested = False
         self.input_bar.set_enabled(False)
+        self.input_bar.show_stop(True)
         self.model_selector.set_status("loading")
         self.chat.start_ai_message()
         self._auto_hide_timer.stop()
@@ -739,18 +758,29 @@ class MainWindow(QMainWindow):
         self.chat.append_to_last_ai(chunk)
 
     def _on_response_finished(self):
+        self._mark_done()
         self.chat.finish_ai_message()
         self.input_bar.set_enabled(True)
         self.model_selector.set_status("ready")
+        if self._cancel_requested:
+            self.chat.add_message("[Generacion detenida]", is_user=False)
+            self._cancel_requested = False
         self.input_bar.input_field.setFocus()
         self._start_auto_hide_timer()
 
     def _on_response_error(self, error: str):
+        self._mark_done()
         self.chat.finish_ai_message()
         self.chat.add_message(f"Error: {error}", is_user=False)
         self.input_bar.set_enabled(True)
         self.model_selector.set_status("error")
         self.input_bar.input_field.setFocus()
+
+    def _cancel_generation(self):
+        if self.worker and self.worker.isRunning():
+            self._cancel_requested = True
+            self.worker.requestInterruption()
+            self.worker.wait(2000)
 
     def _on_file_attached(self, filepath: str):
         self._pending_files.append(filepath)
@@ -761,9 +791,33 @@ class MainWindow(QMainWindow):
         self._pending_files.append(filepath)
         self.chat.add_image_preview(pixmap, os.path.basename(filepath))
 
+    def _export_conversation(self):
+        from utils.export import save_conversation_markdown
+        msgs = self.engine.conversation_history
+        if not msgs:
+            self.chat.add_message("No hay mensajes para exportar.", is_user=False)
+            return
+        title = "Conversacion"
+        if self._current_conv_id:
+            data = load_conversation(self._current_conv_id)
+            if data:
+                title = data.get("title", title)
+        try:
+            filepath = save_conversation_markdown(msgs, title)
+            self.chat.add_message(f"Conversacion exportada: {os.path.basename(filepath)}", is_user=False)
+        except Exception as e:
+            self.chat.add_message(f"Error al exportar: {e}", is_user=False)
+
+    def _mark_done(self):
+        self._busy = False
+        self._cancel_requested = False
+        self.input_bar.show_stop(False)
+
     def keyPressEvent(self, event):
         self._reset_auto_hide()
-        if event.key() == Qt.Key.Key_F5:
+        if event.key() == Qt.Key.Key_F4:
+            self._export_conversation()
+        elif event.key() == Qt.Key.Key_F5:
             self._load_models()
         elif event.key() == Qt.Key.Key_F6:
             self._show_api_key_dialog()
@@ -782,6 +836,8 @@ class MainWindow(QMainWindow):
             self._toggle_theme()
         elif event.key() == Qt.Key.Key_F10:
             self._toggle_compact_mode()
+        elif event.key() == Qt.Key.Key_Escape and self._busy:
+            self._cancel_generation()
         elif event.key() == Qt.Key.Key_Escape and self._is_compact:
             self._exit_compact_mode()
         else:
