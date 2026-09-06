@@ -1,0 +1,1 @@
+"""Interfaz de usuario (PyQt6): ventana principal, chat, barra de entrada y selector de modelos."""
