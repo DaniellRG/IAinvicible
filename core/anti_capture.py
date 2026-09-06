@@ -30,7 +30,7 @@ MOD_ALT = 0x0001
 MOD_SHIFT = 0x0004
 MOD_NOREPEAT = 0x4000
 
-VK_OEM_3 = 0xC0
+VK_Z = 0x5A
 
 SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
 SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
@@ -164,8 +164,8 @@ def setup_stealth_window(hwnd: int) -> bool:
 
 
 def register_hotkey(hwnd: int, hotkey_id: int = HOTKEY_ID_TOGGLE,
-                    modifiers: int = MOD_CONTROL, vk_code: int = VK_OEM_3) -> bool:
-    """Registra un hotkey global. Ctrl+` por defecto."""
+                    modifiers: int = MOD_CONTROL | MOD_ALT, vk_code: int = VK_Z) -> bool:
+    """Registra un hotkey global. Ctrl+Alt+Z por defecto."""
     result = RegisterHotKey(hwnd, hotkey_id, modifiers, vk_code)
     return bool(result)
 

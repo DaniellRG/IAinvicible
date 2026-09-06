@@ -394,7 +394,7 @@ class MainWindow(QMainWindow):
         self._busy = False
         self._cancel_requested = False
         self._is_visible = True
-        self._auto_hide_enabled = True
+        self._auto_hide_enabled = False
         self._auto_hide_seconds = 15
         self._is_hidden_by_auto = False
         self._is_compact = False
@@ -470,9 +470,10 @@ class MainWindow(QMainWindow):
 
         self.chat.add_message(
             "Bienvenido! Selecciona un modelo de IA y escribe tu mensaje.\n\n"
-            "Atajos:\n  F4  Exportar conversacion (.md)\n"
+            "Atajos:\n  Ctrl+Alt+Z  Mostrar/Ocultar ventana\n"
+            "  F4  Exportar conversacion (.md)\n"
             "  F5  Actualizar modelos\n  F6  Configurar API Key\n"
-            "  F7  Nueva conversacion\n  F8  Auto-hide on/off\n"
+            "  F7  Nueva conversacion\n  F8  Auto-hide on/off (off por defecto)\n"
             "  F9  Alternar tema\n  F10 Modo compacto\n  Esc Detener generacion",
             is_user=False
         )
