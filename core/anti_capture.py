@@ -3,6 +3,9 @@ from ctypes import wintypes
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
+dwmapi = ctypes.windll.dwmapi
+
+DWMWA_TRANSITIONS_FORCEDISABLED = 3
 
 WDA_EXCLUDEFROMCAPTURE = 0x00000011
 WDA_NONE = 0x00000000
@@ -35,6 +38,10 @@ VK_Z = 0x5A
 SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
 SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
 SetWindowDisplayAffinity.restype = wintypes.BOOL
+
+GetWindowDisplayAffinity = user32.GetWindowDisplayAffinity
+GetWindowDisplayAffinity.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+GetWindowDisplayAffinity.restype = wintypes.BOOL
 
 GetWindowLongW = user32.GetWindowLongW
 GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
@@ -84,9 +91,53 @@ def exclude_from_capture(hwnd: int) -> bool:
     return bool(result)
 
 
+def get_window_display_affinity(hwnd: int) -> int:
+    value = wintypes.DWORD(0)
+    try:
+        if GetWindowDisplayAffinity(hwnd, ctypes.byref(value)):
+            return value.value
+    except Exception:
+        pass
+    return WDA_NONE
+
+
+def is_excluded_from_capture(hwnd: int) -> bool:
+    return get_window_display_affinity(hwnd) == WDA_EXCLUDEFROMCAPTURE
+
+
 def restore_capture(hwnd: int) -> bool:
     result = SetWindowDisplayAffinity(hwnd, WDA_NONE)
     return bool(result)
+
+
+RedrawWindow = user32.RedrawWindow
+RedrawWindow.argtypes = [wintypes.HWND, ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT]
+RedrawWindow.restype = wintypes.BOOL
+
+RDW_INVALIDATE = 0x0001
+RDW_UPDATENOW = 0x0100
+
+
+def redraw_window(hwnd: int) -> bool:
+    result = RedrawWindow(hwnd, None, 0, RDW_INVALIDATE | RDW_UPDATENOW)
+    return bool(result)
+
+
+DwmSetWindowAttribute = dwmapi.DwmSetWindowAttribute
+DwmSetWindowAttribute.argtypes = [
+    wintypes.HWND, wintypes.DWORD,
+    ctypes.c_void_p, wintypes.DWORD
+]
+DwmSetWindowAttribute.restype = ctypes.c_long
+
+
+def disable_window_transitions(hwnd: int) -> bool:
+    value = ctypes.c_int(1)
+    result = DwmSetWindowAttribute(
+        hwnd, DWMWA_TRANSITIONS_FORCEDISABLED,
+        ctypes.byref(value), ctypes.sizeof(value)
+    )
+    return result == 0
 
 
 def hide_from_taskbar(hwnd: int) -> bool:
@@ -159,13 +210,15 @@ def setup_stealth_window(hwnd: int) -> bool:
     hide_from_taskbar(hwnd)
     hide_from_alt_tab(hwnd)
     exclude_from_capture(hwnd)
+    disable_window_transitions(hwnd)
     set_window_title(hwnd, "Notas.txt - Bloc de notas")
     return True
 
 
 def register_hotkey(hwnd: int, hotkey_id: int = HOTKEY_ID_TOGGLE,
-                    modifiers: int = MOD_CONTROL | MOD_ALT, vk_code: int = VK_Z) -> bool:
-    """Registra un hotkey global. Ctrl+Alt+Z por defecto."""
+                    modifiers: int = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+                    vk_code: int = VK_Z) -> bool:
+    """Registra un hotkey global. Ctrl+Alt+Z por defecto (sin auto-repeticion)."""
     result = RegisterHotKey(hwnd, hotkey_id, modifiers, vk_code)
     return bool(result)
 
