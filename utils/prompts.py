@@ -62,6 +62,24 @@ def delete_prompt(name: str):
     return False
 
 
+def rename_prompt(old_name: str, new_name: str) -> str:
+    """Renombra el archivo de un prompt. Devuelve la ruta final o '' si falla."""
+    old_path = _full_path(old_name)
+    new_name = new_name.strip()
+    if not old_path or not os.path.exists(old_path) or not new_name:
+        return ""
+    new_path = _full_path(new_name)
+    if not new_path or new_path == old_path:
+        return new_path
+    if new_path.lower() == old_path.lower():
+        return new_path
+    if os.path.exists(new_path):
+        return ""
+    os.makedirs(PROMPTS_DIR, exist_ok=True)
+    os.replace(old_path, new_path)
+    return new_path
+
+
 def new_prompt_name() -> str:
     os.makedirs(PROMPTS_DIR, exist_ok=True)
     index = 1

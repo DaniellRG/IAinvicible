@@ -7,7 +7,11 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from utils.prompts import (
-    list_prompts, read_prompt, save_prompt, delete_prompt, new_prompt_name
+    list_prompts, read_prompt, save_prompt, delete_prompt, rename_prompt,
+    new_prompt_name
+)
+from core.anti_capture import (
+    setup_stealth_window, exclude_from_capture, set_topmost
 )
 
 
@@ -57,8 +61,6 @@ class PromptEditorDialog(QDialog):
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("Ej: Generador Ejercicios Java.md")
         self.name_input.setText(name)
-        if mode == "edit":
-            self.name_input.setEnabled(False)
         name_layout.addWidget(self.name_input, 1)
         layout.addLayout(name_layout)
 
@@ -87,6 +89,16 @@ class PromptEditorDialog(QDialog):
             QMessageBox.warning(self, "Prompt", "Escribe un nombre para el prompt.")
             return
         super().accept()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        try:
+            hwnd = int(self.winId())
+            setup_stealth_window(hwnd)
+            exclude_from_capture(hwnd)
+            set_topmost(hwnd)
+        except Exception:
+            pass
 
     def result_name(self) -> str:
         return self.name_input.text().strip()
@@ -219,7 +231,17 @@ class PromptsPanel(QWidget):
         content = read_prompt(name)
         dialog = PromptEditorDialog(name=name, content=content, mode="edit", parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            save_prompt(name, dialog.result_content())
+            new_name = dialog.result_name()
+            if new_name != name and not rename_prompt(name, new_name):
+                QMessageBox.warning(
+                    self, "Prompt",
+                    "No se pudo renombrar: ya existe un prompt con ese nombre."
+                )
+                return
+            saved_name = new_name if new_name else name
+            if self._active_prompt == name:
+                self._active_prompt = saved_name
+            save_prompt(saved_name, dialog.result_content())
             self.refresh_list()
             self.prompt_edited.emit()
 
