@@ -1,10 +1,16 @@
 import json
 import os
+import sys
 from typing import Generator, Optional
+
+_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _root not in sys.path:
+    sys.path.insert(0, _root)
 
 from .ollama_client import OllamaClient
 from .cloud_client import CloudClient
 from .local_gguf import LocalGGUFClient
+from utils.prompts import read_prompt, prompt_exists
 
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
@@ -25,13 +31,14 @@ DEFAULT_CONFIG = {
         "theme": "dark",
         "font_size": 13,
     },
-    "ai": {
-        "system_prompt": (
-            "Eres un asistente util y preciso. Responde de forma clara y concisa. "
-            "Si te piden resolver un ejercicio o problema, muestra el razonamiento paso a paso. "
-            "Responde en el idioma que te hablen."
-        ),
-        "temperature": 0.7,
+"ai": {
+            "system_prompt": (
+                "Eres un asistente util y preciso. Responde de forma clara y concisa. "
+                "Si te piden resolver un ejercicio o problema, muestra el razonamiento paso a paso. "
+                "Responde en el idioma que te hablen."
+            ),
+            "active_prompt": "",
+            "temperature": 0.7,
         "max_tokens": 4096,
         "context_messages": 20,
     },
@@ -108,6 +115,28 @@ class AIEngine:
         self.config["ai"]["system_prompt"] = prompt
         self.save_config()
 
+    def set_active_prompt(self, name: str):
+        name = name.strip() if name else ""
+        if name and not prompt_exists(name):
+            self.config["ai"]["active_prompt"] = ""
+            self.save_config()
+            return False
+        self.config["ai"]["active_prompt"] = name
+        self.save_config()
+        return True
+
+    def get_active_prompt(self) -> str:
+        return self.config.get("ai", {}).get("active_prompt", "")
+
+    def get_active_prompt_content(self) -> str:
+        name = self.get_active_prompt()
+        if not name:
+            return ""
+        try:
+            return read_prompt(name)
+        except Exception:
+            return ""
+
     def set_temperature(self, temperature: float):
         self.config["ai"]["temperature"] = max(0.0, min(2.0, temperature))
         self.save_config()
@@ -128,6 +157,15 @@ class AIEngine:
 
     def load_local_gguf(self, path: str) -> bool:
         return self.local_gguf.load_model(path)
+
+    def gguf_is_loaded(self) -> bool:
+        return (
+            self.local_gguf.is_loaded()
+            and self.local_gguf.model_path == self.current_model
+        )
+
+    def gguf_is_loading(self) -> bool:
+        return self.local_gguf.is_loading()
 
     def get_available_models(self) -> dict:
         result = {"local": [], "cloud": []}
@@ -151,9 +189,17 @@ class AIEngine:
         return status
 
     def _build_messages(self, files_content: list[dict]) -> list[dict]:
-        messages = [{"role": "system", "content": self.system_prompt}]
+        system_content = self.system_prompt
+        active_prompt = self.get_active_prompt_content()
+        if active_prompt:
+            system_content = (
+                "[Instrucciones extra solicitadas por el usuario, cumplelas junto a tu "
+                "sistema:\n" + active_prompt + "]\n\n" + system_content
+            )
 
-        budget_tokens = estimate_tokens(self.system_prompt)
+        messages = [{"role": "system", "content": system_content}]
+
+        budget_tokens = estimate_tokens(system_content)
         max_total = self.config.get("ai", {}).get("context_tokens", 16000)
 
         context_limit = self.config.get("ai", {}).get("context_messages", 20)
@@ -192,10 +238,8 @@ class AIEngine:
                     options={"temperature": temperature},
                 )
             elif self.current_provider == "local_file":
-                if not self.local_gguf.is_loaded():
-                    yield "Cargando modelo local... Esto puede tardar unos momentos.\n\n"
+                if not self.local_gguf.is_loaded() or self.local_gguf.model_path != self.current_model:
                     self.local_gguf.load_model(self.current_model)
-                    yield "Modelo cargado correctamente!\n\n"
                 generator = self.local_gguf.chat(
                     messages=messages,
                     temperature=temperature,
@@ -226,6 +270,9 @@ class AIEngine:
         if self.current_provider == "ollama":
             return self.ollama.is_available()
         elif self.current_provider == "local_file":
-            return self.local_gguf.is_loaded() or os.path.exists(self.current_model)
+            return (
+                self.local_gguf.is_loaded()
+                and self.local_gguf.model_path == self.current_model
+            )
         else:
             return self.cloud.is_available() and bool(self.cloud.api_key)

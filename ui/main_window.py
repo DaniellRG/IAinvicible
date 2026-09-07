@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QLabel, QMessageBox, QDialog,
     QLineEdit, QFormLayout, QPushButton, QComboBox, QApplication,
-    QListWidget, QListWidgetItem, QFrame
+    QListWidget, QListWidgetItem, QFrame, QTabWidget
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon
@@ -22,6 +22,7 @@ from PyQt6.QtCore import QAbstractNativeEventFilter
 from ui.model_selector import ModelSelector
 from ui.chat_widget import ChatWidget
 from ui.input_bar import InputBar
+from ui.prompts_panel import PromptsPanel
 from ui.styles import get_theme
 from core.anti_capture import (
     exclude_from_capture, is_excluded_from_capture, set_topmost,
@@ -99,6 +100,26 @@ class ModelLoadWorker(QThread):
         try:
             models = self.engine.get_available_models()
             self.finished.emit(models)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class GGUFLoadWorker(QThread):
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+
+    def __init__(self, engine: AIEngine, path: str):
+        super().__init__()
+        self.engine = engine
+        self.path = path
+
+    def run(self):
+        try:
+            ok = self.engine.load_local_gguf(self.path)
+            if ok:
+                self.finished.emit()
+            else:
+                self.error.emit("El modelo no pudo cargarse.")
         except Exception as e:
             self.error.emit(str(e))
 
@@ -311,6 +332,8 @@ class HistorySidebar(QFrame):
     conversation_selected = pyqtSignal(str)
     conversation_deleted = pyqtSignal(str)
     conversation_renamed = pyqtSignal(str, str)
+    prompt_activated = pyqtSignal(str)
+    prompt_edited = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -321,8 +344,17 @@ class HistorySidebar(QFrame):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.setTabPosition(QTabWidget.TabPosition.North)
+
+        hist_tab = QWidget()
+        hist_layout = QVBoxLayout(hist_tab)
+        hist_layout.setContentsMargins(8, 8, 8, 8)
+        hist_layout.setSpacing(4)
 
         header = QHBoxLayout()
         title = QLabel("Historial")
@@ -336,11 +368,20 @@ class HistorySidebar(QFrame):
         new_btn.setToolTip("Nueva conversacion")
         new_btn.clicked.connect(lambda: self.conversation_deleted.emit("new"))
         header.addWidget(new_btn)
-        layout.addLayout(header)
+        hist_layout.addLayout(header)
 
         self.list_widget = QListWidget()
         self.list_widget.setSpacing(2)
-        layout.addWidget(self.list_widget, 1)
+        hist_layout.addWidget(self.list_widget, 1)
+
+        self.tabs.addTab(hist_tab, "Historial")
+
+        self.prompts = PromptsPanel()
+        self.prompts.prompt_activated.connect(self.prompt_activated.emit)
+        self.prompts.prompt_edited.connect(self.prompt_edited.emit)
+        self.tabs.addTab(self.prompts, "Prompts")
+
+        layout.addWidget(self.tabs)
 
     def refresh_list(self, selected_id: str = None):
         self.list_widget.clear()
@@ -402,6 +443,10 @@ class MainWindow(QMainWindow):
         self._current_theme = "dark"
         self._current_conv_id = None
         self._saved_normal_geometry = None
+        self._gguf_worker = None
+        self._gguf_pending = []
+        self._gguf_send_queued = False
+        self._gguf_token = 0
 
         ui_config = self.engine.config.get("ui", {})
         self._current_theme = ui_config.get("theme", "dark")
@@ -431,6 +476,7 @@ class MainWindow(QMainWindow):
         self._register_hotkey()
         self._start_auto_hide_timer()
         QTimer.singleShot(100, self._load_models)
+        QTimer.singleShot(1200, self._maybe_preload_saved_gguf)
 
     def _setup_ui(self):
         central = QWidget()
@@ -446,6 +492,8 @@ class MainWindow(QMainWindow):
         self.history_sidebar.conversation_selected.connect(self._load_conversation)
         self.history_sidebar.conversation_deleted.connect(self._on_delete_conversation)
         self.history_sidebar.conversation_renamed.connect(self._on_rename_conversation)
+        self.history_sidebar.prompt_activated.connect(self._on_prompt_activated)
+        self.history_sidebar.prompts.set_active(self.engine.get_active_prompt())
         self.splitter.addWidget(self.history_sidebar)
 
         right_panel = QWidget()
@@ -590,6 +638,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self._auto_hide_timer.stop()
         self._stealth_timer.stop()
+        self.model_selector.stop_timers()
         self._auto_save_conversation()
         geom = self.geometry()
         self.engine.config["ui"]["window_x"] = geom.x()
@@ -670,6 +719,13 @@ class MainWindow(QMainWindow):
         self.engine.clear_history()
         self.chat.add_message("Nueva conversacion iniciada.", is_user=False)
         self.history_sidebar.refresh_list()
+
+    def _on_prompt_activated(self, name: str):
+        if self.engine.set_active_prompt(name):
+            self.chat.add_message(f"Prompt activado: {name}", is_user=False)
+        else:
+            self.history_sidebar.prompts.refresh_list()
+            self.chat.add_message("No se pudo activar el prompt.", is_user=False)
 
     def _on_delete_conversation(self, conv_id: str):
         if conv_id == "new":
@@ -756,8 +812,90 @@ class MainWindow(QMainWindow):
 
     def _on_model_changed(self, provider: str, model: str):
         self.engine.set_model(provider, model)
+        if provider == "local_file":
+            self._gguf_pending.clear()
+            if self._gguf_send_queued and self._busy:
+                self._abort_pending_send("[Envio cancelado: cambiaste de modelo.]")
+            if self.engine.gguf_is_loaded():
+                self.model_selector.show_gguf_ready(os.path.basename(model))
+                self.model_selector.set_status("ready")
+            else:
+                self.model_selector.set_status("loading")
+                self._start_gguf_load(model)
+            return
         self.model_selector.set_status("loading")
         QTimer.singleShot(300, self._check_model_ready)
+
+    def _maybe_preload_saved_gguf(self):
+        if self.engine.current_provider != "local_file":
+            return
+        model = self.engine.current_model
+        if not model or not os.path.exists(model):
+            return
+        if self.engine.gguf_is_loaded():
+            self.model_selector.show_gguf_ready(os.path.basename(model))
+            self.model_selector.set_status("ready")
+            return
+        self.model_selector.set_status("loading")
+        self._start_gguf_load(model)
+
+    def _start_gguf_load(self, path: str):
+        self._gguf_token += 1
+        token = self._gguf_token
+        self.model_selector.show_gguf_loading(os.path.basename(path))
+        worker = GGUFLoadWorker(self.engine, path)
+        worker.finished.connect(lambda t=token, p=path: self._on_gguf_loaded(t, p))
+        worker.error.connect(lambda msg, t=token: self._on_gguf_error(t, msg))
+        self._gguf_worker = worker
+        worker.start()
+
+    def _on_gguf_loaded(self, token: int, path: str):
+        if token != self._gguf_token:
+            return
+        self._gguf_worker = None
+        self.model_selector.show_gguf_ready(os.path.basename(path))
+        self.model_selector.set_status("ready")
+        pending = self._gguf_pending[:]
+        self._gguf_pending.clear()
+        for cb in pending:
+            try:
+                cb()
+            except Exception:
+                pass
+
+    def _on_gguf_error(self, token: int, msg: str):
+        if token != self._gguf_token:
+            return
+        self._gguf_worker = None
+        self._gguf_pending.clear()
+        self.model_selector.show_gguf_error(msg)
+        self.model_selector.set_status("error")
+        if self._gguf_send_queued:
+            self._abort_pending_send(f"Error al cargar el modelo: {msg}")
+        else:
+            self.chat.add_message(f"Error al cargar el modelo: {msg}", is_user=False)
+
+    def _abort_pending_send(self, msg: str):
+        self._gguf_send_queued = False
+        self._mark_done()
+        self.chat.finish_ai_message()
+        self.input_bar.set_enabled(True)
+        self.chat.add_message(msg, is_user=False)
+        self.input_bar.input_field.setFocus()
+
+    def _ensure_gguf_loaded(self, callback):
+        if self.engine.current_provider != "local_file":
+            callback()
+            return
+        if self.engine.gguf_is_loaded():
+            callback()
+            return
+        self.model_selector.show_gguf_loading(os.path.basename(self.engine.current_model))
+        self._gguf_send_queued = True
+        self._gguf_pending.append(callback)
+        if self._gguf_worker and self._gguf_worker.isRunning():
+            return
+        self._start_gguf_load(self.engine.current_model)
 
     def _check_model_ready(self):
         if self.engine.is_model_ready():
@@ -795,6 +933,10 @@ class MainWindow(QMainWindow):
         self.chat.start_ai_message()
         self._auto_hide_timer.stop()
 
+        self._ensure_gguf_loaded(lambda: self._start_ai_worker(text, files_content))
+
+    def _start_ai_worker(self, text: str, files_content: list):
+        self._gguf_send_queued = False
         self.worker = AIWorker(self.engine, text, files_content)
         self.worker.chunk_received.connect(self._on_chunk)
         self.worker.finished.connect(self._on_response_finished)
@@ -820,7 +962,10 @@ class MainWindow(QMainWindow):
         self.chat.finish_ai_message()
         self.chat.add_message(f"Error: {error}", is_user=False)
         self.input_bar.set_enabled(True)
-        self.model_selector.set_status("error")
+        if self.engine.current_provider == "local_file":
+            self.model_selector.show_gguf_error(error)
+        else:
+            self.model_selector.set_status("error")
         self.input_bar.input_field.setFocus()
 
     def _cancel_generation(self):

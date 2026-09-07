@@ -317,6 +317,39 @@ QToolButton:hover {
     border-right: 1px solid #1b2230;
 }
 
+#history_sidebar QTabWidget::pane {
+    border: none;
+    background: transparent;
+}
+
+#history_sidebar QTabBar::tab {
+    background: transparent;
+    color: #6b7a90;
+    border: none;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+#history_sidebar QTabBar::tab:selected {
+    color: #c5cdd8;
+    border-bottom: 2px solid #3b82f6;
+}
+
+#history_sidebar QTabBar::tab:hover:!selected {
+    color: #8b9bb0;
+}
+
+#history_sidebar QListWidget {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+#history_sidebar QListWidget::item {
+    background: transparent;
+}
+
 #history_item {
     background-color: transparent;
     color: #c5cdd8;
@@ -731,6 +764,39 @@ QToolButton:hover {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #ffffff, stop:1 #f8fafc);
     border-right: 1px solid #e2e8f0;
+}
+
+#history_sidebar QTabWidget::pane {
+    border: none;
+    background: transparent;
+}
+
+#history_sidebar QTabBar::tab {
+    background: transparent;
+    color: #8a94a6;
+    border: none;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+#history_sidebar QTabBar::tab:selected {
+    color: #2563eb;
+    border-bottom: 2px solid #2563eb;
+}
+
+#history_sidebar QTabBar::tab:hover:!selected {
+    color: #475569;
+}
+
+#history_sidebar QListWidget {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+#history_sidebar QListWidget::item {
+    background: transparent;
 }
 
 #history_item {

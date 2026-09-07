@@ -304,16 +304,39 @@ class ModelSelector(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("header_bar")
-        self.setFixedHeight(56)
         self._loading = False
         self._dot_timer = QTimer()
         self._dot_timer.timeout.connect(self._animate_loading)
         self._dot_count = 0
+        self._spinner_chars = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]
+        self._spinner_index = 0
+        self._spinner_timer = QTimer()
+        self._spinner_timer.timeout.connect(self._animate_badge)
+        self._badge_name = ""
+        self._badge_hide_timer = QTimer()
+        self._badge_hide_timer.setSingleShot(True)
+        self._badge_hide_timer.timeout.connect(lambda: self.status_badge.setVisible(False))
         self._setup_ui()
 
     def _setup_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 8, 14, 8)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        badge_row = QHBoxLayout()
+        badge_row.setContentsMargins(14, 6, 14, 0)
+        badge_row.setSpacing(6)
+        self.status_badge = QLabel()
+        self.status_badge.setObjectName("status_badge")
+        self.status_badge.setVisible(False)
+        self.status_badge.setMaximumWidth(320)
+        self.status_badge.setStyleSheet("color: #d4d4d4; background: transparent; border: none;")
+        badge_row.addWidget(self.status_badge)
+        badge_row.addStretch()
+        outer.addLayout(badge_row)
+
+        layout = QHBoxLayout()
+        layout.setContentsMargins(14, 6, 14, 8)
         layout.setSpacing(10)
 
         self.status_dot = QLabel("\u25cf")
@@ -346,6 +369,8 @@ class ModelSelector(QWidget):
         self.refresh_btn.setToolTip("Actualizar modelos de Ollama")
         self.refresh_btn.clicked.connect(self.test_connection.emit)
         layout.addWidget(self.refresh_btn)
+
+        outer.addLayout(layout)
 
         self.set_status("off")
 
@@ -420,6 +445,74 @@ class ModelSelector(QWidget):
         dots = "." * self._dot_count
         self.status_label.setText(f"Cargando{dots}")
 
+    def _animate_badge(self):
+        self._spinner_index += 1
+        self._update_badge_text()
+
+    def _update_badge_text(self):
+        name = self._badge_name
+        if len(name) > 26:
+            name = name[:24] + "\u2026"
+        spinner = self._spinner_chars[self._spinner_index % len(self._spinner_chars)]
+        if name:
+            self.status_badge.setText(f"{spinner}  Cargando modelo\u2026 {name}")
+        else:
+            self.status_badge.setText(f"{spinner}  Cargando modelo\u2026")
+
+    def show_gguf_loading(self, name: str = ""):
+        self._badge_name = name
+        self._badge_hide_timer.stop()
+        self.status_badge.setVisible(True)
+        self.status_badge.setStyleSheet("""
+            QLabel {
+                background: rgba(255, 193, 7, 0.12);
+                color: #ffc107;
+                border: 1px solid rgba(255, 193, 7, 0.55);
+                border-radius: 12px;
+                padding: 4px 12px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+        """)
+        self._spinner_timer.start(160)
+        self._update_badge_text()
+
+    def show_gguf_ready(self, name: str = ""):
+        self._spinner_timer.stop()
+        self._badge_name = name
+        self.status_badge.setVisible(True)
+        self.status_badge.setStyleSheet("""
+            QLabel {
+                background: rgba(0, 204, 102, 0.14);
+                color: #00cc66;
+                border: 1px solid rgba(0, 204, 102, 0.6);
+                border-radius: 12px;
+                padding: 4px 12px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+        """)
+        self.status_badge.setText("\u2713 Modelo listo")
+        self._badge_hide_timer.start(3500)
+
+    def show_gguf_error(self, msg: str = ""):
+        self._spinner_timer.stop()
+        self._badge_name = msg
+        self.status_badge.setVisible(True)
+        self.status_badge.setStyleSheet("""
+            QLabel {
+                background: rgba(204, 51, 51, 0.14);
+                color: #ff6b6b;
+                border: 1px solid rgba(204, 51, 51, 0.6);
+                border-radius: 12px;
+                padding: 4px 12px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+        """)
+        self.status_badge.setText("\u2715 Error al cargar modelo")
+        self._badge_hide_timer.start(6000)
+
     def add_model(self, display_name: str, provider: str, model_id: str):
         if not hasattr(self, '_all_models'):
             self._all_models = []
@@ -442,6 +535,11 @@ class ModelSelector(QWidget):
         if data:
             return data[0], data[1]
         return None, None
+
+    def stop_timers(self):
+        self._dot_timer.stop()
+        self._spinner_timer.stop()
+        self._badge_hide_timer.stop()
 
 
 import os

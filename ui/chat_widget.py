@@ -8,6 +8,13 @@ from PyQt6.QtGui import QPixmap, QColor
 from PyQt6.QtWidgets import QApplication
 import time
 import os
+import sys
+
+_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _root not in sys.path:
+    sys.path.insert(0, _root)
+
+from utils.markdown import md_to_html
 
 
 class ChatMessage(QFrame):
@@ -120,7 +127,11 @@ class ChatMessage(QFrame):
         msg_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         msg_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         msg_label.setStyleSheet("border: none; background: transparent;")
-        msg_label.setText(text if text else " ")
+        if self.is_user:
+            msg_label.setText(text if text else " ")
+        else:
+            msg_label.setTextFormat(Qt.TextFormat.RichText)
+            msg_label.setText(md_to_html(text))
         self._msg_label = msg_label
         bubble_layout.addWidget(msg_label)
 
@@ -172,12 +183,18 @@ class ChatMessage(QFrame):
     def set_text(self, text: str):
         self._msg_text = text
         if hasattr(self, '_msg_label'):
-            self._msg_label.setText(text if text else " ")
+            if self.is_user:
+                self._msg_label.setText(text if text else " ")
+            else:
+                self._msg_label.setText(md_to_html(text))
 
     def append_text(self, text: str):
         self._msg_text += text
         if hasattr(self, '_msg_label'):
-            self._msg_label.setText(self._msg_text)
+            if self.is_user:
+                self._msg_label.setText(self._msg_text)
+            else:
+                self._msg_label.setText(md_to_html(self._msg_text))
 
 
 class TypingIndicator(QWidget):

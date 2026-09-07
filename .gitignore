@@ -3,6 +3,9 @@ history/
 config.json
 error.log
 
+# Prompts del usuario (contenido personal)
+prompts/
+
 # Builds
 dist/
 build/
