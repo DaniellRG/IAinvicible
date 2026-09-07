@@ -5,3 +5,6 @@ ollama>=0.4.0
 Pillow>=10.0.0
 PyPDF2>=3.0.0
 python-docx>=1.0.0
+
+# Opcional (modelos locales .gguf). La app funciona sin esto.
+# llama-cpp-python

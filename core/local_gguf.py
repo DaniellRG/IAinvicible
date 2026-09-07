@@ -6,7 +6,7 @@ from .errors import AIProviderError
 try:
     from llama_cpp import Llama
     _HAS_LLAMA_CPP = True
-except ImportError:
+except Exception:
     Llama = None
     _HAS_LLAMA_CPP = False
 

@@ -30,8 +30,32 @@ python -m PyInstaller ^
     --hidden-import "PyQt6.QtWidgets" ^
     --hidden-import "PyQt6.QtCore" ^
     --hidden-import "PyQt6.QtGui" ^
-    --hidden-import "llama_cpp" ^
+    --collect-all "llama_cpp" ^
     --hidden-import "requests" ^
+    --exclude-module "torch" ^
+    --exclude-module "torchvision" ^
+    --exclude-module "torchaudio" ^
+    --exclude-module "transformers" ^
+    --exclude-module "tensorflow" ^
+    --exclude-module "tensorboard" ^
+    --exclude-module "scipy" ^
+    --exclude-module "pandas" ^
+    --exclude-module "matplotlib" ^
+    --exclude-module "cv2" ^
+    --exclude-module "yt_dlp" ^
+    --exclude-module "onnxruntime" ^
+    --exclude-module "soundfile" ^
+    --exclude-module "av" ^
+    --exclude-module "lxml" ^
+    --exclude-module "sympy" ^
+    --exclude-module "openpyxl" ^
+    --exclude-module "pytest" ^
+    --exclude-module "rich" ^
+    --exclude-module "websockets" ^
+    --exclude-module "mutagen" ^
+    --exclude-module "brotli" ^
+    --exclude-module "curl_cffi" ^
+    --exclude-module "secretstorage" ^
     launcher.py
 
 echo.
