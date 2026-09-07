@@ -18,10 +18,13 @@ from utils.markdown import md_to_html
 
 
 class ChatMessage(QFrame):
-    def __init__(self, text: str, is_user: bool = True, parent=None):
+    def __init__(self, text: str, is_user: bool = True, parent=None, streaming: bool = False):
         super().__init__(parent)
         self.is_user = is_user
         self._msg_text = text
+        self._streaming = streaming
+        self._copy_btn = None
+        self._copy_bottom_btn = None
         self._setup_ui(text)
 
     def _setup_ui(self, text: str):
@@ -98,26 +101,7 @@ class ChatMessage(QFrame):
         header_row.addStretch()
 
         if not self.is_user:
-            self._copy_btn = QPushButton("Copiar")
-            self._copy_btn.setFixedHeight(24)
-            self._copy_btn.setStyleSheet("""
-                QPushButton {
-                    color: #6b7a90;
-                    background: transparent;
-                    border: 1px solid #1e2a3a;
-                    border-radius: 6px;
-                    padding: 3px 10px;
-                    font-size: 10px;
-                    font-weight: 600;
-                }
-                QPushButton:hover {
-                    color: #c5cdd8;
-                    background-color: #1e2a3a;
-                    border-color: #3b82f6;
-                }
-            """)
-            self._copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._copy_btn.clicked.connect(self._copy_text)
+            self._copy_btn = self._make_copy_button()
             header_row.addWidget(self._copy_btn)
 
         bubble_layout.addLayout(header_row)
@@ -135,50 +119,89 @@ class ChatMessage(QFrame):
         self._msg_label = msg_label
         bubble_layout.addWidget(msg_label)
 
+        if not self.is_user:
+            self._copy_bottom_btn = self._make_copy_button()
+            self._copy_bottom_btn.setVisible(not self._streaming)
+            bottom_row = QHBoxLayout()
+            bottom_row.setSpacing(0)
+            bottom_row.addStretch()
+            bottom_row.addWidget(self._copy_bottom_btn)
+            bubble_layout.addLayout(bottom_row)
+
         if self.is_user:
             time_label = QLabel(time.strftime("%H:%M"))
             time_label.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 9px; border: none; background: transparent;")
             time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
             bubble_layout.addWidget(time_label)
 
+    def _make_copy_button(self):
+        btn = QPushButton("Copiar")
+        btn.setFixedHeight(24)
+        btn.setStyleSheet("""
+            QPushButton {
+                color: #6b7a90;
+                background: transparent;
+                border: 1px solid #1e2a3a;
+                border-radius: 6px;
+                padding: 3px 10px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                color: #c5cdd8;
+                background-color: #1e2a3a;
+                border-color: #3b82f6;
+            }
+        """)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(self._copy_text)
+        return btn
+
     def _copy_text(self):
         clipboard = QApplication.clipboard()
         clipboard.setText(self._msg_text)
-        if hasattr(self, '_copy_btn'):
-            self._copy_btn.setText("Copiado!")
-            self._copy_btn.setStyleSheet("""
-                QPushButton {
-                    color: white;
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #059669, stop:1 #10b981);
-                    border: 1px solid #059669;
-                    border-radius: 6px;
-                    padding: 3px 10px;
-                    font-size: 10px;
-                    font-weight: 600;
-                }
-            """)
-            QTimer.singleShot(1500, self._reset_copy_btn)
+        for btn in (self._copy_btn, self._copy_bottom_btn):
+            if btn is not None:
+                btn.setText("Copiado!")
+                btn.setStyleSheet("""
+                    QPushButton {
+                        color: white;
+                        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                            stop:0 #059669, stop:1 #10b981);
+                        border: 1px solid #059669;
+                        border-radius: 6px;
+                        padding: 3px 10px;
+                        font-size: 10px;
+                        font-weight: 600;
+                    }
+                """)
+        QTimer.singleShot(1500, self._reset_copy_btn)
 
     def _reset_copy_btn(self):
-        if hasattr(self, '_copy_btn'):
-            self._copy_btn.setText("Copiar")
-            self._copy_btn.setStyleSheet("""
-                QPushButton {
-                    color: #6b7a90;
-                    background: transparent;
-                    border: 1px solid #1e2a3a;
-                    border-radius: 6px;
-                    padding: 3px 10px;
-                    font-size: 10px;
-                    font-weight: 600;
-                }
-                QPushButton:hover {
-                    color: #c5cdd8;
-                    background-color: #1e2a3a;
-                    border-color: #3b82f6;
-                }
-            """)
+        for btn in (self._copy_btn, self._copy_bottom_btn):
+            if btn is not None:
+                btn.setText("Copiar")
+                btn.setStyleSheet("""
+                    QPushButton {
+                        color: #6b7a90;
+                        background: transparent;
+                        border: 1px solid #1e2a3a;
+                        border-radius: 6px;
+                        padding: 3px 10px;
+                        font-size: 10px;
+                        font-weight: 600;
+                    }
+                    QPushButton:hover {
+                        color: #c5cdd8;
+                        background-color: #1e2a3a;
+                        border-color: #3b82f6;
+                    }
+                """)
+
+    def set_complete(self):
+        self._streaming = False
+        if self._copy_bottom_btn is not None:
+            self._copy_bottom_btn.setVisible(True)
 
     def set_text(self, text: str):
         self._msg_text = text
@@ -305,7 +328,7 @@ class ChatWidget(QWidget):
                 self._typing_widget.stop()
                 self._typing_widget.deleteLater()
                 self._typing_widget = None
-            self._ai_message = ChatMessage("", is_user=False, parent=self)
+            self._ai_message = ChatMessage("", is_user=False, parent=self, streaming=True)
             self._add_widget(self._ai_message)
             self._messages.append(self._ai_message)
         self._ai_message.append_text(text)
@@ -313,6 +336,8 @@ class ChatWidget(QWidget):
 
     def finish_ai_message(self):
         self._remove_typing()
+        if self._ai_message is not None:
+            self._ai_message.set_complete()
         self._ai_message = None
 
     def _remove_typing(self):

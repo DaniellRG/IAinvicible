@@ -1,11 +1,12 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QLabel, QPushButton, QDialog, QLineEdit, QPlainTextEdit,
-    QMessageBox, QApplication
+    QMessageBox, QApplication, QFrame, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
+from ui.animated_highlight import AnimatedHighlight
 from utils.prompts import (
     list_prompts, read_prompt, save_prompt, delete_prompt, new_prompt_name
 )
@@ -95,6 +96,66 @@ class PromptEditorDialog(QDialog):
         return self.editor.toPlainText()
 
 
+class PromptItemWidget(QWidget):
+    clicked = pyqtSignal(str)
+    activated = pyqtSignal(str)
+
+    def __init__(self, name: str, is_active: bool = False, parent=None):
+        super().__init__(parent)
+        self._name = name
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self._highlight = AnimatedHighlight(self)
+        self._highlight.resize(self.width(), self.height())
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 6, 8, 6)
+        layout.setSpacing(6)
+
+        icon = QLabel("\U0001F4DD")
+        icon.setStyleSheet("font-size: 13px; border: none; background: transparent;")
+        icon.setFixedWidth(22)
+        layout.addWidget(icon)
+
+        self._name_label = QLabel(name)
+        self._name_label.setStyleSheet("font-size: 12px; border: none; background: transparent;")
+        self._name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self._name_label, 1)
+
+        self._active_label = QLabel("\u25CF Activo")
+        self._active_label.setStyleSheet(
+            "font-size: 10px; color: #10b981; border: none; background: transparent; font-weight: 600;"
+        )
+        self._active_label.setVisible(is_active)
+        layout.addWidget(self._active_label)
+
+    def set_selected(self, selected: bool, animate: bool = True):
+        self._highlight.set_selected(selected, animate)
+        if selected:
+            self._name_label.setStyleSheet(
+                "font-size: 12px; border: none; background: transparent; color: white; font-weight: 600;"
+            )
+        else:
+            self._name_label.setStyleSheet(
+                "font-size: 12px; border: none; background: transparent;"
+            )
+
+    def set_active(self, is_active: bool):
+        self._active_label.setVisible(is_active)
+
+    def mousePressEvent(self, event):
+        self.clicked.emit(self._name)
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        self.activated.emit(self._name)
+        event.accept()
+
+    def resizeEvent(self, event):
+        self._highlight.resize(self.width(), self.height())
+        super().resizeEvent(event)
+
+
 class PromptsPanel(QWidget):
     prompt_activated = pyqtSignal(str)
     prompt_edited = pyqtSignal()
@@ -120,7 +181,7 @@ class PromptsPanel(QWidget):
 
         self.list_widget = QListWidget()
         self.list_widget.setSpacing(2)
-        self.list_widget.itemDoubleClicked.connect(self._use_current)
+        self.list_widget.itemSelectionChanged.connect(self._on_selection_changed)
         layout.addWidget(self.list_widget, 1)
 
         btn_row = QHBoxLayout()
@@ -185,22 +246,45 @@ class PromptsPanel(QWidget):
     def refresh_list(self):
         self.list_widget.clear()
         for name in list_prompts():
+            widget = PromptItemWidget(name, is_active=(name == self._active_prompt))
+            widget.clicked.connect(self._on_item_clicked)
+            widget.activated.connect(self._activate)
             item = QListWidgetItem()
-            text = name
-            if name == self._active_prompt:
-                text += "   \u25CF"
-            item.setText(text)
+            item.setSizeHint(widget.sizeHint())
             item.setData(Qt.ItemDataRole.UserRole, name)
             item.setToolTip("Doble clic para activar")
-            if name == self._active_prompt:
-                item.setForeground(Qt.GlobalColor.green)
             self.list_widget.addItem(item)
+            self.list_widget.setItemWidget(item, widget)
 
         if self.list_widget.count() == 0:
             empty = QListWidgetItem("Sin prompts todavia.\nPulsa + para crear uno.")
             empty.setFlags(empty.flags() & ~Qt.ItemFlag.ItemIsSelectable)
             empty.setForeground(Qt.GlobalColor.gray)
             self.list_widget.addItem(empty)
+            return
+
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == self._active_prompt:
+                self.list_widget.setCurrentRow(i)
+                break
+        self._on_selection_changed()
+
+    def _on_item_clicked(self, name: str):
+        self._on_selection_changed()
+
+    def _on_selection_changed(self):
+        current = self.list_widget.currentRow()
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            widget = self.list_widget.itemWidget(item)
+            if widget is not None and hasattr(widget, "set_selected"):
+                widget.set_selected(i == current)
+
+    def _activate(self, name: str):
+        self._active_prompt = name
+        self.prompt_activated.emit(name)
+        self.refresh_list()
 
     def _get_name(self) -> str:
         return self.current_prompt_name()
@@ -251,9 +335,7 @@ class PromptsPanel(QWidget):
             self.prompt_edited.emit()
 
     def _use_current(self):
-        name = self._get_name()
+        name = self.current_prompt_name()
         if not name:
             return
-        self._active_prompt = name
-        self.prompt_activated.emit(name)
-        self.refresh_list()
+        self._activate(name)

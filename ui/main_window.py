@@ -23,6 +23,7 @@ from ui.model_selector import ModelSelector
 from ui.chat_widget import ChatWidget
 from ui.input_bar import InputBar
 from ui.prompts_panel import PromptsPanel
+from ui.animated_highlight import AnimatedHighlight
 from ui.styles import get_theme
 from core.anti_capture import (
     exclude_from_capture, is_excluded_from_capture, set_topmost,
@@ -200,6 +201,9 @@ class HistoryItemWidget(QWidget):
         self._is_selected = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
+        self._highlight = AnimatedHighlight(self)
+        self._highlight.resize(self.width(), self.height())
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 8, 8, 8)
         layout.setSpacing(6)
@@ -242,15 +246,8 @@ class HistoryItemWidget(QWidget):
     def set_selected(self, selected: bool):
         self._is_selected = selected
         if selected:
-            self.setStyleSheet("""
-                QWidget {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #1d4ed8, stop:1 #7c3aed);
-                    border-radius: 10px;
-                }
-            """)
             self._title_label.setStyleSheet("font-size: 12px; border: none; color: white; font-weight: 600; background: transparent;")
-            self._count_label.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.7); border: none; background: transparent;")
+            self._count_label.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.75); border: none; background: transparent;")
             self._rename_btn.setStyleSheet("color: white; background: transparent; border: none; font-size: 12px;")
             self._delete_btn.setStyleSheet("color: white; background: transparent; border: none; font-size: 12px;")
         else:
@@ -259,6 +256,11 @@ class HistoryItemWidget(QWidget):
             self._count_label.setStyleSheet("font-size: 10px; color: #6b7a90; border: none; background: transparent;")
             self._rename_btn.setObjectName("history_delete_btn")
             self._delete_btn.setObjectName("history_delete_btn")
+        self._highlight.set_selected(selected)
+
+    def resizeEvent(self, event):
+        self._highlight.resize(self.width(), self.height())
+        super().resizeEvent(event)
 
 
 class RenameDialog(QDialog):
