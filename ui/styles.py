@@ -350,16 +350,6 @@ QToolButton:hover {
     background: transparent;
 }
 
-#history_sidebar QListWidget::item:hover {
-    background: #1e2a3a;
-    border-radius: 10px;
-}
-
-#history_sidebar QListWidget::item:selected {
-    background: transparent;
-    color: #c5cdd8;
-}
-
 #history_item {
     background-color: transparent;
     color: #c5cdd8;
@@ -807,16 +797,6 @@ QToolButton:hover {
 
 #history_sidebar QListWidget::item {
     background: transparent;
-}
-
-#history_sidebar QListWidget::item:hover {
-    background: #f1f5f9;
-    border-radius: 10px;
-}
-
-#history_sidebar QListWidget::item:selected {
-    background: transparent;
-    color: #1e293b;
 }
 
 #history_item {
