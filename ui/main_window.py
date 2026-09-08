@@ -27,7 +27,8 @@ from ui.styles import get_theme
 from core.anti_capture import (
     exclude_from_capture, is_excluded_from_capture, set_topmost,
     setup_stealth_window, register_hotkey, unregister_hotkey,
-    restore_capture, HOTKEY_ID_TOGGLE, WM_HOTKEY
+    restore_capture, HOTKEY_ID_TOGGLE, WM_HOTKEY,
+    hide_from_processes, spoof_process_visibility
 )
 from core.ai_engine import AIEngine
 from utils.file_handler import read_file_content
@@ -536,6 +537,7 @@ class MainWindow(QMainWindow):
 
     def _apply_anti_capture(self):
         hwnd = int(self.winId())
+        hide_from_processes()
         setup_stealth_window(hwnd)
         exclude_from_capture(hwnd)
         self.show()
@@ -548,6 +550,10 @@ class MainWindow(QMainWindow):
             hwnd = int(self.winId())
             if hwnd and not is_excluded_from_capture(hwnd):
                 exclude_from_capture(hwnd)
+        except Exception:
+            pass
+        try:
+            spoof_process_visibility()
         except Exception:
             pass
 

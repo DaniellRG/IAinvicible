@@ -15,22 +15,34 @@ hide_console()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from core.anti_capture import hide_from_processes, detach_console
+
+
+def apply_process_stealth():
+    """Aplica todas las tecnicas de stealth de proceso al inicio."""
+    try:
+        hide_from_processes()
+    except Exception:
+        pass
+    try:
+        detach_console()
+    except Exception:
+        pass
+    try:
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 0)
+    except Exception:
+        pass
+
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QFont
 from ui.main_window import MainWindow
 
 
-def rename_process():
-    """Cambia el nombre del proceso a uno generico."""
-    try:
-        kernel32 = ctypes.windll.kernel32
-        kernel32.SetProcessNameW("svchost.exe")
-    except Exception:
-        pass
-
-
 def main():
-    rename_process()
+    apply_process_stealth()
 
     app = QApplication(sys.argv)
     app.setApplicationName("Notas")

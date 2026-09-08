@@ -3,6 +3,9 @@ chcp 65001 >nul
 cd /d "%~dp0"
 title Compilando programa...
 
+rem Nombre del ejecutable generado (sin .exe). Cambialo aqui si quieres otro.
+set "NOMBRE=svchost"
+
 echo ============================================
 echo   COMPILANDO EJECUTABLE PORTABLE
 echo ============================================
@@ -17,7 +20,7 @@ if %errorlevel% neq 0 (
 
 echo [2/3] Compilando (esto puede tardar 2-5 minutos)...
 python -m PyInstaller ^
-    --name "IA_Invisible" ^
+    --name "%NOMBRE%" ^
     --onefile ^
     --windowed ^
     --noconfirm ^
@@ -60,16 +63,16 @@ python -m PyInstaller ^
 
 echo.
 echo [3/3] Moviendo ejecutable...
-if exist "dist\IA_Invisible.exe" (
-    move /Y "dist\IA_Invisible.exe" "IA_Invisible.exe"
+if exist "dist\%NOMBRE%.exe" (
+    move /Y "dist\%NOMBRE%.exe" "%NOMBRE%.exe"
     echo.
     echo ============================================
     echo   COMPILACION COMPLETADA!
     echo ============================================
     echo.
-    echo Ejecutable: IA_Invisible.exe
+    echo Ejecutable: %NOMBRE%.exe
     echo Tamano: 
-    for %%A in (IA_Invisible.exe) do echo   %%~zA bytes
+    for %%A in (%NOMBRE%.exe) do echo   %%~zA bytes
     echo.
     echo Copia este archivo a tu USB y ejecutalo.
     echo No necesitas instalar nada mas.
