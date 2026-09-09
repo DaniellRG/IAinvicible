@@ -36,11 +36,19 @@ def main():
 
     from PyQt6.QtWidgets import QApplication
     from PyQt6.QtGui import QFont
+    from core.single_instance import SingleInstanceGuard
+    from core.tooltips import install_tooltip_blocker
     from ui.main_window import MainWindow
 
     app = QApplication(sys.argv)
     app.setApplicationName("Notas")
     app.setOrganizationName("Microsoft")
+    install_tooltip_blocker(app)
+
+    guard = SingleInstanceGuard()
+    if not guard.acquire():
+        # Ya hay una instancia abierta: le pedimos que se muestre y salimos.
+        return 0
 
     font = QFont("Segoe UI", 13)
     app.setFont(font)
@@ -48,7 +56,22 @@ def main():
     window = MainWindow()
     window.show()
 
-    app.aboutToQuit.connect(lambda: _cleanup())
+    def _show_window():
+        try:
+            window.show_from_second_instance()
+        except Exception:
+            pass
+
+    guard.on_show = _show_window
+
+    def _quit():
+        try:
+            guard.close()
+        except Exception:
+            pass
+        _cleanup()
+
+    app.aboutToQuit.connect(_quit)
 
     sys.exit(app.exec())
 

@@ -23,6 +23,7 @@ from ui.model_selector import ModelSelector
 from ui.chat_widget import ChatWidget
 from ui.input_bar import InputBar
 from ui.prompts_panel import PromptsPanel
+from ui.icon_helpers import IconButton, GRAY, BLUE, DANGER
 from ui.styles import get_theme
 from core.anti_capture import (
     exclude_from_capture, is_excluded_from_capture, set_topmost,
@@ -224,19 +225,12 @@ class HistoryItemWidget(QWidget):
 
         layout.addLayout(text_layout, 1)
 
-        self._rename_btn = QPushButton("\u270E")
-        self._rename_btn.setObjectName("history_delete_btn")
-        self._rename_btn.setFixedSize(24, 24)
-        self._rename_btn.setToolTip("Renombrar")
-        self._rename_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._rename_btn = IconButton("mdi.pencil-outline", tooltip="Renombrar", size=24)
         self._rename_btn.clicked.connect(lambda: self.rename_clicked.emit(self._conv_id))
         layout.addWidget(self._rename_btn)
 
-        self._delete_btn = QPushButton("\U0001F5D1")
-        self._delete_btn.setObjectName("history_delete_btn")
-        self._delete_btn.setFixedSize(24, 24)
-        self._delete_btn.setToolTip("Eliminar")
-        self._delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._delete_btn = IconButton("mdi.trash-can-outline", tooltip="Eliminar", size=24,
+                                      variant="danger", hover_color=DANGER)
         self._delete_btn.clicked.connect(lambda: self.delete_clicked.emit(self._conv_id))
         layout.addWidget(self._delete_btn)
 
@@ -252,14 +246,14 @@ class HistoryItemWidget(QWidget):
             """)
             self._title_label.setStyleSheet("font-size: 12px; border: none; color: white; font-weight: 600; background: transparent;")
             self._count_label.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.7); border: none; background: transparent;")
-            self._rename_btn.setStyleSheet("color: white; background: transparent; border: none; font-size: 12px;")
-            self._delete_btn.setStyleSheet("color: white; background: transparent; border: none; font-size: 12px;")
+            self._rename_btn.set_colors("#ffffff", "#e0e7ff")
+            self._delete_btn.set_colors("#ffffff", "#fecaca")
         else:
             self.setStyleSheet("")
             self._title_label.setStyleSheet("font-size: 12px; border: none; font-weight: 500; background: transparent;")
             self._count_label.setStyleSheet("font-size: 10px; color: #6b7a90; border: none; background: transparent;")
-            self._rename_btn.setObjectName("history_delete_btn")
-            self._delete_btn.setObjectName("history_delete_btn")
+            self._rename_btn.set_colors(GRAY, BLUE)
+            self._delete_btn.set_colors(GRAY, DANGER)
 
 
 class RenameDialog(QDialog):
@@ -334,6 +328,7 @@ class HistorySidebar(QFrame):
     conversation_deleted = pyqtSignal(str)
     conversation_renamed = pyqtSignal(str, str)
     prompt_activated = pyqtSignal(str)
+    prompt_deactivated = pyqtSignal()
     prompt_edited = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -363,10 +358,7 @@ class HistorySidebar(QFrame):
         header.addWidget(title)
         header.addStretch()
 
-        new_btn = QPushButton("+")
-        new_btn.setObjectName("history_delete_btn")
-        new_btn.setFixedSize(24, 24)
-        new_btn.setToolTip("Nueva conversacion")
+        new_btn = IconButton("mdi.plus", tooltip="Nueva conversacion", size=24)
         new_btn.clicked.connect(lambda: self.conversation_deleted.emit("new"))
         header.addWidget(new_btn)
         hist_layout.addLayout(header)
@@ -379,6 +371,7 @@ class HistorySidebar(QFrame):
 
         self.prompts = PromptsPanel()
         self.prompts.prompt_activated.connect(self.prompt_activated.emit)
+        self.prompts.prompt_deactivated.connect(self.prompt_deactivated.emit)
         self.prompts.prompt_edited.connect(self.prompt_edited.emit)
         self.tabs.addTab(self.prompts, "Prompts")
 
@@ -494,6 +487,8 @@ class MainWindow(QMainWindow):
         self.history_sidebar.conversation_deleted.connect(self._on_delete_conversation)
         self.history_sidebar.conversation_renamed.connect(self._on_rename_conversation)
         self.history_sidebar.prompt_activated.connect(self._on_prompt_activated)
+        self.history_sidebar.prompt_deactivated.connect(self._on_prompt_deactivated)
+        self.history_sidebar.prompt_edited.connect(self._on_prompt_synced)
         self.history_sidebar.prompts.set_active(self.engine.get_active_prompt())
         self.splitter.addWidget(self.history_sidebar)
 
@@ -519,6 +514,10 @@ class MainWindow(QMainWindow):
 
         self.splitter.addWidget(right_panel)
         self.splitter.setSizes([220, 580])
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        right_panel.setMinimumWidth(320)
 
         main_layout.addWidget(self.splitter)
 
@@ -591,6 +590,16 @@ class MainWindow(QMainWindow):
         self._start_auto_hide_timer()
         if hwnd:
             QTimer.singleShot(0, self._delayed_stealth_apply)
+
+    def show_from_second_instance(self):
+        """Llamado cuando el usuario abre otra instancia: muestra la ventana existente."""
+        if self._is_visible:
+            self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+            self.show()
+            self.raise_()
+            self.activateWindow()
+        else:
+            self._show_window()
 
     def _delayed_stealth_apply(self):
         if not self._is_visible:
@@ -671,10 +680,14 @@ class MainWindow(QMainWindow):
         self._saved_normal_geometry = self.geometry()
         self.history_sidebar.setVisible(False)
         self.model_selector.setVisible(False)
+        try:
+            self.model_selector._close_picker()
+        except Exception:
+            pass
         self.chat.scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         screen = QApplication.primaryScreen().geometry()
         compact_w = 380
-        compact_h = 200
+        compact_h = 250
         x = screen.width() - compact_w - 20
         y = screen.height() - compact_h - 60
         self.setGeometry(x, y, compact_w, compact_h)
@@ -727,11 +740,15 @@ class MainWindow(QMainWindow):
         self.history_sidebar.refresh_list()
 
     def _on_prompt_activated(self, name: str):
-        if self.engine.set_active_prompt(name):
-            self.chat.add_message(f"Prompt activado: {name}", is_user=False)
-        else:
-            self.history_sidebar.prompts.refresh_list()
-            self.chat.add_message("No se pudo activar el prompt.", is_user=False)
+        self.engine.set_active_prompt(name)
+
+    def _on_prompt_deactivated(self):
+        self.engine.set_active_prompt("")
+        self.history_sidebar.prompts.set_active("")
+
+    def _on_prompt_synced(self):
+        name = self.history_sidebar.prompts.active_prompt_name()
+        self.engine.set_active_prompt(name)
 
     def _on_delete_conversation(self, conv_id: str):
         if conv_id == "new":

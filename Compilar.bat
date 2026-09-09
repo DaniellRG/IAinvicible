@@ -4,7 +4,9 @@ cd /d "%~dp0"
 title Compilando programa...
 
 rem Nombre del ejecutable generado (sin .exe). Cambialo aqui si quieres otro.
-set "NOMBRE=svchost"
+rem OJO: nombres como 'svchost.exe' pueden activar Windows Defender fuera de System32.
+rem Un nombre neutro (por defecto 'notas') evita falsos positivos.
+set "NOMBRE=notas"
 
 echo ============================================
 echo   COMPILANDO EJECUTABLE PORTABLE
@@ -33,8 +35,11 @@ python -m PyInstaller ^
     --hidden-import "PyQt6.QtWidgets" ^
     --hidden-import "PyQt6.QtCore" ^
     --hidden-import "PyQt6.QtGui" ^
+    --hidden-import "PyQt6.QtNetwork" ^
     --collect-all "llama_cpp" ^
     --hidden-import "requests" ^
+    --hidden-import "qtawesome" ^
+    --collect-all "qtawesome" ^
     --exclude-module "torch" ^
     --exclude-module "torchvision" ^
     --exclude-module "torchaudio" ^

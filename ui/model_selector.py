@@ -1,14 +1,16 @@
 import os
-import json
 import subprocess
+import ctypes
+import itertools
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QComboBox, QLabel,
-    QPushButton, QFrame, QVBoxLayout, QLineEdit,
-    QDialog, QListWidget, QListWidgetItem, QFileDialog,
-    QSplitter, QTabWidget, QGroupBox
+    QPushButton, QFrame, QVBoxLayout, QListWidget,
+    QListWidgetItem, QFileDialog,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread
-from PyQt6.QtGui import QFont
+
+from ui.icon_helpers import IconButton
 
 
 OLLAMA_PATHS = [
@@ -17,6 +19,71 @@ OLLAMA_PATHS = [
 ]
 
 OLLAMA_MANIFESTS = os.path.expanduser("~\\.ollama\\models\\manifests\\registry.ollama.ai\\library")
+
+# Carpetas que se omiten al buscar en toda la PC (para no tardar horas)
+PC_SKIP_DIRS = {
+    "node_modules", "__pycache__", ".git", ".cache", "AppData",
+    "$RECYCLE.BIN", "System Volume Information", "python_embed",
+    "Intel", "AMD", "NVIDIA", "Windows", "Program Files",
+    "Program Files (x86)", ".ollama", "history", "build", "dist",
+    "ProgramData", "Recovery", ".venv", "venv", ".gradle", ".m2", ".npm",
+}
+
+# Al escanear un disco/USB concreto solo se omiten las carpetas de sistema
+# (así los modelos en una USB se encuentran sin importar donde estén).
+DRIVE_SKIP_DIRS = {
+    "$RECYCLE.BIN", "System Volume Information", "Windows",
+    "Program Files", "Program Files (x86)", "node_modules",
+    ".git", "__pycache__",
+}
+
+MODEL_EXTENSIONS = (".gguf", ".bin", ".pt", ".safetensors", ".pth", ".onnx", ".ckpt")
+
+DRIVE_TYPES = {2: "USB / Removible", 3: "Local", 4: "Red", 5: "CD/DVD", 6: "RAM"}
+
+
+def _volume_label(root: str) -> str:
+    try:
+        buf = ctypes.create_unicode_buffer(261)
+        if ctypes.windll.kernel32.GetVolumeInformationW(root, buf, 261, None, None, None, None, 0):
+            return buf.value
+    except Exception:
+        pass
+    return ""
+
+
+def _free_gb(root: str) -> float:
+    try:
+        free = ctypes.c_ulonglong()
+        if ctypes.windll.kernel32.GetDiskFreeSpaceExW(root, ctypes.byref(free), None, None):
+            return free.value / (1024 ** 3)
+    except Exception:
+        pass
+    return 0.0
+
+
+def list_drives() -> list:
+    """Devuelve (root, tipo, etiqueta, gb_libres) de cada unidad/USB detectado."""
+    drives = []
+    try:
+        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+        for i in range(26):
+            if bitmask & (1 << i):
+                root = chr(ord("A") + i) + ":\\"
+                dtype = ctypes.windll.kernel32.GetDriveTypeW(root)
+                drives.append((root, dtype, _volume_label(root), _free_gb(root)))
+    except Exception:
+        drives = [
+            (chr(ord("A") + i) + ":\\", 0, "", 0.0)
+            for i in range(26)
+            if os.path.exists(chr(ord("A") + i) + ":\\")
+        ]
+    return drives
+
+
+def get_fixed_drive_roots() -> list:
+    roots = [root for root, t, _, _ in list_drives() if t == 3]
+    return roots or ["C:\\"]
 
 
 class OllamaScanWorker(QThread):
@@ -53,248 +120,116 @@ class OllamaScanWorker(QThread):
 
 
 class FolderScanWorker(QThread):
+    """Escaneo en paralelo de una o mas raices.
+
+    Emite:
+      - batch: lista de hallazgos acumulados (para mostrarlos en vivo)
+      - progress: texto con la ubicacion que se esta analizando
+      - finished: lista completa ordenada
+    Cada hallazgo es ("file", nombre, ruta, size_mb) o ("ollama", nombre) para
+    modelos de Ollama encontrados dentro de un .ollama.
+    """
+
+    batch = pyqtSignal(list)
+    progress = pyqtSignal(str)
     finished = pyqtSignal(list)
 
-    def __init__(self, folder: str):
+    def __init__(self, folders, pc: bool = False):
         super().__init__()
-        self.folder = folder
+        self.folders = [folders] if isinstance(folders, str) else list(folders)
+        self.pc = pc
+        self._cancel = False
+        self._seen_ollama = set()
+        self._counter = itertools.count()
 
-    def run(self):
-        extensions = (".gguf", ".bin", ".pt", ".safetensors", ".pth", ".onnx")
-        found = []
+    def stop(self):
+        self._cancel = True
+
+    def _check_ollama(self, ollama_dir, found):
+        manifest_base = os.path.join(
+            ollama_dir, "models", "manifests", "registry.ollama.ai", "library"
+        )
+        if not os.path.isdir(manifest_base):
+            return
         try:
-            for root, dirs, files in os.walk(self.folder):
-                for f in files:
-                    if f.lower().endswith(extensions):
-                        full_path = os.path.join(root, f)
-                        try:
-                            size_mb = os.path.getsize(full_path) / (1024 * 1024)
-                        except Exception:
-                            size_mb = 0
-                        found.append((f, full_path, size_mb))
+            for model_dir in os.listdir(manifest_base):
+                model_path = os.path.join(manifest_base, model_dir)
+                if os.path.isdir(model_path):
+                    for tag in os.listdir(model_path):
+                        full = f"{model_dir}:{tag}" if tag != "latest" else model_dir
+                        if full not in self._seen_ollama:
+                            self._seen_ollama.add(full)
+                            found.append(("ollama", full))
         except Exception:
             pass
-        found.sort(key=lambda x: x[0])
-        self.finished.emit(found)
 
+    def _walk(self, root):
+        walk_found = []
+        skip = PC_SKIP_DIRS if self.pc else DRIVE_SKIP_DIRS
+        try:
+            for dirpath, dirnames, filenames in os.walk(root):
+                if self._cancel:
+                    return walk_found
+                pruned = []
+                for d in dirnames:
+                    if d in skip:
+                        continue
+                    if d == ".ollama":
+                        self._check_ollama(os.path.join(dirpath, d), walk_found)
+                        continue
+                    pruned.append(d)
+                dirnames[:] = pruned
 
-class ModelBrowserDialog(QDialog):
-    model_selected = pyqtSignal(str, str)
+                n = next(self._counter)
+                if n % 150 == 0:
+                    self.progress.emit(dirpath)
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Buscar modelos en el PC")
-        self.setMinimumSize(550, 450)
-        self.setWindowFlags(
-            Qt.WindowType.Dialog |
-            Qt.WindowType.WindowStaysOnTopHint
-        )
-        self.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; color: #d4d4d4; }
-            QLabel { color: #d4d4d4; }
-            QLineEdit {
-                background-color: #3c3c3c; color: #d4d4d4;
-                border: 1px solid #555; border-radius: 4px;
-                padding: 8px; font-size: 12px;
-            }
-            QListWidget {
-                background-color: #252526; color: #d4d4d4;
-                border: 1px solid #555; border-radius: 4px;
-                font-size: 12px;
-            }
-            QListWidget::item { padding: 6px 8px; }
-            QListWidget::item:selected { background-color: #094771; }
-            QListWidget::item:hover { background-color: #2d2d2d; }
-            QPushButton {
-                background-color: #3c3c3c; color: #d4d4d4;
-                border: 1px solid #555; border-radius: 4px;
-                padding: 8px 14px; font-size: 12px;
-            }
-            QPushButton:hover { background-color: #505050; }
-            QTabWidget::pane { border: 1px solid #333; }
-            QTabBar::tab {
-                background: #252526; color: #888;
-                padding: 8px 16px; margin-right: 2px;
-                border: 1px solid #333; border-bottom: none;
-                border-radius: 4px 4px 0 0;
-            }
-            QTabBar::tab:selected { background: #1e1e1e; color: #d4d4d4; }
-        """)
+                for f in filenames:
+                    if f.lower().endswith(MODEL_EXTENSIONS):
+                        full = os.path.join(dirpath, f)
+                        try:
+                            size_mb = os.path.getsize(full) / (1024 * 1024)
+                        except Exception:
+                            size_mb = 0
+                        walk_found.append(("file", f, full, size_mb))
+        except Exception:
+            pass
+        return walk_found
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+    def run(self):
+        tasks = []
+        for folder in self.folders:
+            try:
+                entries = os.listdir(folder)
+                if not entries:
+                    continue
+                for entry in entries:
+                    full = os.path.join(folder, entry)
+                    if os.path.isdir(full):
+                        tasks.append(full)
+            except Exception:
+                tasks.append(folder)
 
-        tabs = QTabWidget()
-        layout.addWidget(tabs)
+        found = []
+        workers = max(1, min(4, len(tasks)))
+        try:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(self._walk, t) for t in tasks]
+                for fut in as_completed(futures):
+                    if self._cancel:
+                        break
+                    chunk = fut.result()
+                    if chunk:
+                        self.batch.emit(chunk)
+                        found.extend(chunk)
+        except Exception:
+            pass
 
-        ollama_tab = self._create_ollama_tab()
-        tabs.addTab(ollama_tab, "Ollama Local")
-
-        folder_tab = self._create_folder_tab()
-        tabs.addTab(folder_tab, "Explorar Archivos")
-
-    def _create_ollama_tab(self):
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setSpacing(8)
-
-        info = QLabel("Modelos detectados en Ollama:")
-        info.setStyleSheet("font-weight: bold; color: #888;")
-        layout.addWidget(info)
-
-        self.ollama_search = QLineEdit()
-        self.ollama_search.setPlaceholderText("Buscar modelo...")
-        self.ollama_search.textChanged.connect(self._filter_ollama)
-        layout.addWidget(self.ollama_search)
-
-        self.ollama_list = QListWidget()
-        self.ollama_list.itemDoubleClicked.connect(self._select_ollama_model)
-        layout.addWidget(self.ollama_list, 1)
-
-        btn_row = QHBoxLayout()
-        rescan_btn = QPushButton("\u21bb Escanear")
-        rescan_btn.clicked.connect(self._scan_ollama)
-        btn_row.addWidget(rescan_btn)
-
-        select_btn = QPushButton("Seleccionar")
-        select_btn.setStyleSheet("QPushButton { background-color: #0078d4; color: white; }")
-        select_btn.clicked.connect(self._select_ollama_from_button)
-        btn_row.addWidget(select_btn)
-        layout.addLayout(btn_row)
-
-        QTimer.singleShot(100, self._scan_ollama)
-        return widget
-
-    def _create_folder_tab(self):
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setSpacing(8)
-
-        info = QLabel("Busca archivos de modelo (.gguf, .bin, .pt, .safetensors):")
-        info.setStyleSheet("font-weight: bold; color: #888;")
-        layout.addWidget(info)
-
-        self.folder_search = QLineEdit()
-        self.folder_search.setPlaceholderText("Ruta de carpeta o buscar...")
-        layout.addWidget(self.folder_search)
-
-        browse_row = QHBoxLayout()
-        browse_btn = QPushButton("\U0001F4C2 Examinar carpeta")
-        browse_btn.clicked.connect(self._browse_folder)
-        browse_row.addWidget(browse_btn)
-
-        search_btn = QPushButton("\U0001F50D Buscar en PC")
-        search_btn.clicked.connect(self._search_pc)
-        browse_row.addWidget(search_btn)
-        layout.addLayout(browse_row)
-
-        self.folder_list = QListWidget()
-        self.folder_list.itemDoubleClicked.connect(self._select_folder_model)
-        layout.addWidget(self.folder_list, 1)
-
-        select_btn = QPushButton("Seleccionar")
-        select_btn.setStyleSheet("QPushButton { background-color: #0078d4; color: white; }")
-        select_btn.clicked.connect(self._select_folder_from_button)
-        layout.addWidget(select_btn)
-
-        return widget
-
-    def _scan_ollama(self):
-        self.ollama_list.clear()
-        item = QListWidgetItem("Escaneando modelos de Ollama...")
-        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-        item.setForeground(Qt.GlobalColor.gray)
-        self.ollama_list.addItem(item)
-
-        self._ollama_worker = OllamaScanWorker()
-        self._ollama_worker.finished.connect(self._on_ollama_scanned)
-        self._ollama_worker.start()
-
-    def _on_ollama_scanned(self, models: list):
-        self.ollama_list.clear()
-        for model in models:
-            item = QListWidgetItem(f"\U0001F4BB {model}")
-            item.setData(Qt.ItemDataRole.UserRole, model)
-            self.ollama_list.addItem(item)
-
-        if not models:
-            item = QListWidgetItem("No se encontraron modelos. Instala modelos con: ollama pull <modelo>")
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            item.setForeground(Qt.GlobalColor.gray)
-            self.ollama_list.addItem(item)
-
-    def _filter_ollama(self, text: str):
-        for i in range(self.ollama_list.count()):
-            item = self.ollama_list.item(i)
-            item.setHidden(text.lower() not in item.text().lower())
-
-    def _select_ollama_model(self, item: QListWidgetItem):
-        model = item.data(Qt.ItemDataRole.UserRole)
-        if model:
-            self.model_selected.emit("ollama", model)
-            self.accept()
-
-    def _select_ollama_from_button(self):
-        item = self.ollama_list.currentItem()
-        if item:
-            self._select_ollama_model(item)
-
-    def _browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta con modelos")
-        if folder:
-            self.folder_search.setText(folder)
-            self._scan_folder(folder)
-
-    def _scan_folder(self, folder: str):
-        self.folder_list.clear()
-        item = QListWidgetItem("Buscando archivos de modelo...")
-        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-        item.setForeground(Qt.GlobalColor.gray)
-        self.folder_list.addItem(item)
-
-        self._folder_worker = FolderScanWorker(folder)
-        self._folder_worker.finished.connect(self._on_folder_scanned)
-        self._folder_worker.start()
-
-    def _on_folder_scanned(self, found: list):
-        self.folder_list.clear()
-        for name, path, size in found:
-            label = f"\U0001F4C4 {name}  ({size:.0f} MB)"
-            item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, path)
-            self.folder_list.addItem(item)
-
-        if not found:
-            item = QListWidgetItem("No se encontraron archivos de modelo en esta carpeta")
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            item.setForeground(Qt.GlobalColor.gray)
-            self.folder_list.addItem(item)
-
-    def _search_pc(self):
-        search_path = self.folder_search.text().strip()
-        if not search_path:
-            search_path = os.path.expanduser("~")
-        if not os.path.exists(search_path):
-            self.folder_list.clear()
-            item = QListWidgetItem("Ruta no encontrada")
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            item.setForeground(Qt.GlobalColor.gray)
-            self.folder_list.addItem(item)
+        if self._cancel:
             return
-        self._scan_folder(search_path)
 
-    def _select_folder_model(self, item: QListWidgetItem):
-        path = item.data(Qt.ItemDataRole.UserRole)
-        if path:
-            name = os.path.basename(path)
-            self.model_selected.emit("local_file", path)
-            self.accept()
-
-    def _select_folder_from_button(self):
-        item = self.folder_list.currentItem()
-        if item:
-            self._select_folder_model(item)
+        found.sort(key=lambda x: (x[0], x[1].lower()))
+        self.finished.emit(found)
 
 
 class ModelSelector(QWidget):
@@ -305,6 +240,13 @@ class ModelSelector(QWidget):
         super().__init__(parent)
         self.setObjectName("header_bar")
         self._loading = False
+        self._all_models = []
+        self._scanning = False
+        self._scan_token = 0
+        self._folder_worker = None
+        self._selected_drive = ""
+        self._found_items = []
+        self._seen = set()
         self._dot_timer = QTimer()
         self._dot_timer.timeout.connect(self._animate_loading)
         self._dot_count = 0
@@ -337,7 +279,7 @@ class ModelSelector(QWidget):
 
         layout = QHBoxLayout()
         layout.setContentsMargins(14, 6, 14, 8)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
         self.status_dot = QLabel("\u25cf")
         self.status_dot.setObjectName("status_dot")
@@ -356,56 +298,372 @@ class ModelSelector(QWidget):
 
         layout.addStretch()
 
-        self.browse_btn = QPushButton("\U0001F50D")
-        self.browse_btn.setObjectName("attach_btn")
-        self.browse_btn.setFixedSize(32, 32)
-        self.browse_btn.setToolTip("Buscar modelos en el PC")
-        self.browse_btn.clicked.connect(self._open_browser)
-        layout.addWidget(self.browse_btn)
+        self.ollama_btn = QPushButton("\U0001F999")
+        self.ollama_btn.setObjectName("attach_btn")
+        self.ollama_btn.setFixedSize(32, 32)
+        self.ollama_btn.setToolTip("Ollama local")
+        self.ollama_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.ollama_btn.clicked.connect(self._toggle_ollama)
+        layout.addWidget(self.ollama_btn)
+
+        self.folder_btn = QPushButton("\U0001F4C2")
+        self.folder_btn.setObjectName("attach_btn")
+        self.folder_btn.setFixedSize(32, 32)
+        self.folder_btn.setToolTip("Examinar carpeta")
+        self.folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.folder_btn.clicked.connect(self._toggle_folder)
+        layout.addWidget(self.folder_btn)
+
+        self.search_btn = QPushButton("\U0001F50D")
+        self.search_btn.setObjectName("attach_btn")
+        self.search_btn.setFixedSize(32, 32)
+        self.search_btn.setToolTip("Buscar modelos (PC / Discos)")
+        self.search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.search_btn.clicked.connect(self._toggle_search_menu)
+        layout.addWidget(self.search_btn)
 
         self.refresh_btn = QPushButton("\u21bb")
         self.refresh_btn.setObjectName("attach_btn")
         self.refresh_btn.setFixedSize(32, 32)
         self.refresh_btn.setToolTip("Actualizar modelos de Ollama")
+        self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.refresh_btn.clicked.connect(self.test_connection.emit)
         layout.addWidget(self.refresh_btn)
 
         outer.addLayout(layout)
 
+        outer.addWidget(self._build_picker_panel())
+
         self.set_status("off")
 
-    def _filter_models(self, text: str):
-        current = self.model_combo.currentText()
-        self.model_combo.blockSignals(True)
-        self.model_combo.clear()
-        for model in self._all_models:
-            display, provider, model_id = model
-            if text.lower() in display.lower():
-                self.model_combo.addItem(display, (provider, model_id))
-        idx = self.model_combo.findText(current)
-        if idx >= 0:
-            self.model_combo.setCurrentIndex(idx)
-        self.model_combo.blockSignals(False)
+    def _build_picker_panel(self):
+        self._picker_mode = ""
+        self.picker_panel = QFrame()
+        self.picker_panel.setObjectName("picker_panel")
+        self.picker_panel.setStyleSheet("""
+            QFrame#picker_panel {
+                background-color: #252526;
+                border: 1px solid #333;
+                border-radius: 8px;
+                margin: 0 14px 8px 14px;
+            }
+            QLabel { color: #d4d4d4; background: transparent; border: none; }
+            QLabel#picker_icon { font-size: 18px; }
+            QLabel#picker_title { font-size: 13px; font-weight: bold; }
+            QLabel#picker_info { color: #888; font-size: 11px; }
+            QListWidget {
+                background-color: #1e1e1e; color: #d4d4d4;
+                border: 1px solid #444; border-radius: 6px;
+                font-size: 12px;
+            }
+            QListWidget::item { padding: 6px 8px; }
+            QListWidget::item:selected { background-color: #094771; }
+            QListWidget::item:hover { background-color: #2d2d2d; }
+        """)
+        self.picker_panel.setVisible(False)
 
-    def _open_browser(self):
-        dialog = ModelBrowserDialog(self)
-        dialog.model_selected.connect(self._on_browse_model)
-        dialog.show()
-        try:
-            from core.anti_capture import exclude_from_capture, set_topmost
-            hwnd = int(dialog.winId())
-            exclude_from_capture(hwnd)
-            set_topmost(hwnd)
-        except Exception:
-            pass
-        dialog.exec()
+        panel_layout = QVBoxLayout(self.picker_panel)
+        panel_layout.setContentsMargins(10, 8, 10, 10)
+        panel_layout.setSpacing(6)
 
-    def _on_browse_model(self, provider: str, model_id: str):
+        header_row = QHBoxLayout()
+        header_row.setSpacing(6)
+
+        self.picker_icon = QLabel()
+        self.picker_icon.setObjectName("picker_icon")
+        header_row.addWidget(self.picker_icon)
+
+        self.picker_title = QLabel()
+        self.picker_title.setObjectName("picker_title")
+        header_row.addWidget(self.picker_title)
+
+        header_row.addStretch()
+
+        close_btn = IconButton("mdi.close", tooltip="Cerrar", size=24)
+        close_btn.clicked.connect(self._close_picker)
+        header_row.addWidget(close_btn)
+
+        panel_layout.addLayout(header_row)
+
+        self.picker_info = QLabel()
+        self.picker_info.setObjectName("picker_info")
+        panel_layout.addWidget(self.picker_info)
+
+        self.picker_list = QListWidget()
+        self.picker_list.setMaximumHeight(220)
+        self.picker_list.itemClicked.connect(self._on_picker_item_clicked)
+        panel_layout.addWidget(self.picker_list)
+
+        self.scan_btn = QPushButton("Escanear")
+        self.scan_btn.setObjectName("scan_btn")
+        self.scan_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.scan_btn.setEnabled(False)
+        self.scan_btn.setVisible(False)
+        self.scan_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3b82f6; color: white;
+                border: none; border-radius: 6px;
+                padding: 7px 18px; font-weight: 600;
+            }
+            QPushButton:hover { background-color: #2563eb; }
+            QPushButton:disabled { background-color: #2d3a4a; color: #6b7a90; }
+        """)
+        self.scan_btn.clicked.connect(self._on_scan_btn_clicked)
+        panel_layout.addWidget(self.scan_btn, 0, Qt.AlignmentFlag.AlignRight)
+
+        self._picker_anim = None
+        return self.picker_panel
+
+    # ------------------------------------------------------------------
+    #  Botones: Ollama local / Examinar carpeta / Buscar en PC
+    # ------------------------------------------------------------------
+
+    def _toggle_panel(self, mode: str, icon: str, title: str, info: str):
+        if self._picker_mode == mode and self.picker_panel.isVisible():
+            self._close_picker()
+            return
+        self._picker_mode = mode
+        self.picker_icon.setText(icon)
+        self.picker_title.setText(title)
+        self.picker_info.setText(info)
+        self.picker_panel.setVisible(True)
+        self.picker_list.clear()
+        self._set_picker_busy_text("Buscando...")
+        self._close_picker_effect()
+
+    def _close_picker_effect(self):
+        """Evita artefactos de QGraphicsOpacityEffect que pueden dejar el panel invisible."""
+        if self._picker_anim is not None:
+            self._picker_anim.stop()
+            self._picker_anim = None
+        self.picker_panel.setGraphicsEffect(None)
+
+    def _close_picker(self):
+        self._close_picker_effect()
+        self.picker_panel.setVisible(False)
+        self._picker_mode = ""
+
+    def _set_picker_busy_text(self, text: str):
+        self.picker_list.clear()
+        item = QListWidgetItem(text)
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+        item.setForeground(Qt.GlobalColor.gray)
+        self.picker_list.addItem(item)
+
+    def _toggle_ollama(self):
+        self._toggle_panel("ollama", "\U0001F999", "Ollama local", "Modelos detectados en Ollama:")
+        self._scan_ollama()
+
+    def _toggle_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta con modelos")
+        if not folder:
+            return
+        self._toggle_panel("folder", "\U0001F4C2", "Examinar carpeta", f"Carpeta: {folder}")
+        self._scan_folder(folder, pc=False)
+
+    def _toggle_search_menu(self):
+        self._cancel_current_scan()
+        if self._picker_mode == "searchmenu" and self.picker_panel.isVisible():
+            self._close_picker()
+            return
+        self._picker_mode = "searchmenu"
+        self.picker_icon.setText("\U0001F50D")
+        self.picker_title.setText("Buscar modelos")
+        self.picker_info.setText("Elige como quieres buscar:")
+        self.scan_btn.setVisible(False)
+        self.picker_list.clear()
+
+        menu = [
+            ("\U0001F4BB  Toda la PC", "pc"),
+            ("\U0001F4BD  Discos y USB", "drives"),
+        ]
+        for text, opt_id in menu:
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, ["menu_opt", opt_id])
+            self.picker_list.addItem(item)
+        self.picker_panel.setVisible(True)
+        self._close_picker_effect()
+
+    def _on_search_menu_option(self, opt_id: str):
+        self._cancel_current_scan()
+        if opt_id == "pc":
+            self._picker_mode = "pc"
+            self.picker_title.setText("\U0001F4BB Toda la PC")
+            self.picker_info.setText("Buscando modelos en todo el equipo...")
+            self._scan_folder(get_fixed_drive_roots(), pc=True)
+        elif opt_id == "drives":
+            self._picker_mode = "drives"
+            self.picker_title.setText("\U0001F4BD Discos y USB")
+            self.picker_info.setText("Elige un disco/USB y pulsa Escanear:")
+            self._populate_drives()
+            self.scan_btn.setEnabled(False)
+            self.scan_btn.setText("Escanear")
+            self.scan_btn.setVisible(True)
+
+    def _populate_drives(self):
+        self.picker_list.clear()
+        for root, dtype, label, free in list_drives():
+            type_name = DRIVE_TYPES.get(dtype, "Disco")
+            icon = "\U0001F50C" if dtype == 2 else "\U0001F4BD"
+            text = f"{icon} {root}"
+            if label:
+                text += f"  [{label}]"
+            text += f"  ({type_name}"
+            if free:
+                text += f", {free:.0f} GB libres"
+            text += ")"
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, ["drive", root])
+            self.picker_list.addItem(item)
+
+    def _on_scan_btn_clicked(self):
+        if self._scanning:
+            self._cancel_current_scan()
+            self.picker_info.setText("Escaneo detenido. Se muestran los hallazgos parciales.")
+            return
+        drive = getattr(self, "_selected_drive", "")
+        if not drive:
+            return
+        self._picker_mode = "drive_scan"
+        self.picker_title.setText(f"\U0001F50D Escaneando {drive}")
+        self.picker_info.setText("Buscando modelos...")
+        self._scan_folder(drive, pc=False)
+
+    def _cancel_current_scan(self):
+        self._scan_token += 1
+        if self._folder_worker is not None and self._folder_worker.isRunning():
+            self._folder_worker.stop()
+        self._scanning = False
+        self.scan_btn.setEnabled(False)
+
+    def _set_scanning_state(self, on: bool):
+        self._scanning = on
+        if on:
+            self.scan_btn.setText("Detener")
+            self.scan_btn.setEnabled(True)
+            self.scan_btn.setVisible(True)
+        else:
+            self.scan_btn.setText("Escanear")
+            self.scan_btn.setVisible(False)
+
+    def _scan_ollama(self):
+        self._set_picker_busy_text("Escaneando modelos de Ollama...")
+        self.picker_info.setText("Modelos detectados en Ollama:")
+        self._ollama_worker = OllamaScanWorker()
+        self._ollama_worker.finished.connect(self._on_ollama_scanned)
+        self._ollama_worker.start()
+
+    def _scan_folder(self, folders, pc: bool):
+        self._scan_token += 1
+        token = self._scan_token
+        self._found_items = []
+        self._seen = set()
+        self.picker_list.clear()
+        self._set_scanning_state(True)
+
+        w = FolderScanWorker(folders, pc)
+        self._folder_worker = w
+
+        def on_batch(items):
+            if token != self._scan_token:
+                return
+            for entry in items:
+                key = entry[2] if len(entry) > 2 else entry[1]
+                if key in self._seen:
+                    continue
+                self._seen.add(key)
+                self._found_items.append(entry)
+                self._add_scan_item(entry)
+            self.picker_info.setText(
+                f"Analizando...  {len(self._found_items)} modelos encontrados"
+            )
+
+        def on_progress(dirpath, tok=token):
+            if tok != self._scan_token:
+                return
+            head = dirpath
+            if len(head) > 40:
+                head = "\u2026" + head[-39:]
+            self.picker_info.setText(
+                f"{len(self._found_items)} encontrados \u00b7 analizando {head}"
+            )
+
+        def on_finished(results, tok=token):
+            if tok != self._scan_token:
+                return
+            self._render_scan_results(results)
+            self._set_scanning_state(False)
+
+        w.batch.connect(on_batch)
+        w.progress.connect(on_progress)
+        w.finished.connect(on_finished)
+        w.start()
+
+    def _add_scan_item(self, entry):
+        if entry[0] == "ollama":
+            label = f"\U0001F4BB {entry[1]}"
+            data = ["ollama", entry[1]]
+        else:
+            name, path, size = entry[1], entry[2], entry[3]
+            label = f"\U0001F4C4 {name}  ({size:.0f} MB)"
+            data = ["local_file", path]
+        item = QListWidgetItem(label)
+        item.setData(Qt.ItemDataRole.UserRole, data)
+        self.picker_list.addItem(item)
+
+    def _render_scan_results(self, items: list):
+        self.picker_list.clear()
+        for entry in items:
+            self._add_scan_item(entry)
+        if not items:
+            item = QListWidgetItem("No se encontraron archivos de modelo en esta ubicación")
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            item.setForeground(Qt.GlobalColor.gray)
+            self.picker_list.addItem(item)
+
+    def _on_ollama_scanned(self, models: list):
+        self.picker_list.clear()
+        for model in models:
+            item = QListWidgetItem(f"\U0001F4BB {model}")
+            item.setData(Qt.ItemDataRole.UserRole, ["ollama", model])
+            self.picker_list.addItem(item)
+
+        if not models:
+            item = QListWidgetItem("No se encontraron modelos de Ollama.")
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            item.setForeground(Qt.GlobalColor.gray)
+            self.picker_list.addItem(item)
+
+    def _on_picker_item_clicked(self, item: QListWidgetItem):
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+        kind = data[0]
+        if kind == "menu_opt":
+            self._on_search_menu_option(data[1])
+            return
+        if kind == "drive":
+            self._selected_drive = data[1]
+            self.scan_btn.setEnabled(True)
+            return
+        provider, model_id = data
+        self._select_model(provider, model_id)
+
+    def _select_model(self, provider: str, model_id: str):
         display = f"\U0001F4C2 {os.path.basename(model_id)}" if provider == "local_file" else f"\U0001F4BB {model_id}"
-        self._all_models.append((display, provider, model_id))
-        self.model_combo.addItem(display, (provider, model_id))
-        self.model_combo.setCurrentIndex(self.model_combo.count() - 1)
+        existing = self.model_combo.findData((provider, model_id))
+        if existing < 0:
+            self._all_models.append((display, provider, model_id))
+            self.model_combo.addItem(display, (provider, model_id))
+            self.model_combo.setCurrentIndex(self.model_combo.count() - 1)
+        else:
+            self.model_combo.setCurrentIndex(existing)
         self.model_changed.emit(provider, model_id)
+        self._close_picker()
+
+    # ------------------------------------------------------------------
+    #  Combo y estados
+    # ------------------------------------------------------------------
 
     def _on_model_changed(self, text):
         if not text:
@@ -514,8 +772,6 @@ class ModelSelector(QWidget):
         self._badge_hide_timer.start(6000)
 
     def add_model(self, display_name: str, provider: str, model_id: str):
-        if not hasattr(self, '_all_models'):
-            self._all_models = []
         self._all_models.append((display_name, provider, model_id))
         self.model_combo.addItem(display_name, (provider, model_id))
 
@@ -540,6 +796,3 @@ class ModelSelector(QWidget):
         self._dot_timer.stop()
         self._spinner_timer.stop()
         self._badge_hide_timer.stop()
-
-
-import os

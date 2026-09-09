@@ -1,10 +1,14 @@
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QTextEdit, QPushButton, QFrame, QFileDialog,
-    QLabel, QSizePolicy, QGraphicsDropShadowEffect
+    QLabel, QSizePolicy, QGraphicsDropShadowEffect, QScrollArea
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QPixmap, QFont, QColor
+
+from ui.icon_helpers import (
+    IconButton, make_icon, DANGER
+)
 
 
 class InputBar(QWidget):
@@ -24,29 +28,36 @@ class InputBar(QWidget):
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
 
-        self.attachments_row = QHBoxLayout()
+        self.attachments_scroll = QScrollArea()
+        self.attachments_scroll.setWidgetResizable(True)
+        self.attachments_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.attachments_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.attachments_scroll.setFixedHeight(46)
+        self.attachments_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        self.attachments_scroll.horizontalScrollBar().setStyleSheet(
+            "QScrollBar:horizontal { background: transparent; height: 4px; margin: 0; }"
+            "QScrollBar::handle:horizontal { background: #2d3a4a; border-radius: 2px; min-width: 30px; }"
+            "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }"
+            "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }"
+        )
+        self.attachments_content = QWidget()
+        self.attachments_content.setStyleSheet("background: transparent;")
+        self.attachments_row = QHBoxLayout(self.attachments_content)
+        self.attachments_row.setContentsMargins(0, 0, 0, 0)
         self.attachments_row.setSpacing(6)
-        self.attachments_container = QWidget()
-        self.attachments_container.setLayout(self.attachments_row)
-        self.attachments_container.setVisible(False)
-        layout.addWidget(self.attachments_container)
+        self.attachments_row.addStretch()
+        self.attachments_scroll.setWidget(self.attachments_content)
+        self.attachments_scroll.setVisible(False)
+        layout.addWidget(self.attachments_scroll, 0, Qt.AlignmentFlag.AlignTop)
 
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
 
-        self.image_btn = QPushButton("\U0001F5BC")
-        self.image_btn.setObjectName("image_btn")
-        self.image_btn.setFixedSize(40, 40)
-        self.image_btn.setToolTip("Adjuntar imagen")
-        self.image_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.image_btn = IconButton("mdi.image-outline", tooltip="Adjuntar imagen", size=40)
         self.image_btn.clicked.connect(self._pick_image)
         input_row.addWidget(self.image_btn)
 
-        self.attach_btn = QPushButton("\U0001F4CE")
-        self.attach_btn.setObjectName("attach_btn")
-        self.attach_btn.setFixedSize(40, 40)
-        self.attach_btn.setToolTip("Adjuntar archivo")
-        self.attach_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.attach_btn = IconButton("mdi.paperclip", tooltip="Adjuntar archivo", size=40)
         self.attach_btn.clicked.connect(self._pick_file)
         input_row.addWidget(self.attach_btn)
 
@@ -61,17 +72,29 @@ class InputBar(QWidget):
         self.input_field.installEventFilter(self)
         input_row.addWidget(self.input_field, 1)
 
-        self.send_button = QPushButton("\u27A4")
+        self.send_button = QPushButton()
         self.send_button.setObjectName("send_button")
         self.send_button.setFixedSize(44, 44)
         self.send_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.send_button.setIconSize(QSize(22, 22))
+        send_icon = make_icon("mdi.send", "#ffffff")
+        if send_icon:
+            self.send_button.setIcon(send_icon)
+        else:
+            self.send_button.setText("\u27A4")
         self.send_button.clicked.connect(self._send_message)
 
-        self.stop_button = QPushButton("\u25A0")
+        self.stop_button = QPushButton()
         self.stop_button.setObjectName("stop_button")
         self.stop_button.setFixedSize(44, 44)
         self.stop_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stop_button.setToolTip("Detener generacion (Esc)")
+        self.stop_button.setIconSize(QSize(18, 18))
+        stop_icon = make_icon("mdi.stop", "#f87171")
+        if stop_icon:
+            self.stop_button.setIcon(stop_icon)
+        else:
+            self.stop_button.setText("\u25A0")
         self.stop_button.clicked.connect(self.stop_requested.emit)
         self.stop_button.hide()
         input_row.addWidget(self.send_button)
@@ -123,7 +146,7 @@ class InputBar(QWidget):
             self._add_attachment_badge(path, is_image=True)
 
     def _add_attachment_badge(self, filepath: str, is_image: bool = False):
-        self.attachments_container.setVisible(True)
+        self.attachments_scroll.setVisible(True)
 
         badge = QFrame()
         badge.setStyleSheet("""
@@ -152,35 +175,27 @@ class InputBar(QWidget):
         name_label.setStyleSheet("color: #c5cdd8; font-size: 11px; background: transparent; border: none; font-weight: 500;")
         h.addWidget(name_label)
 
-        close_btn = QPushButton("\u2715")
-        close_btn.setFixedSize(20, 20)
-        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                color: #6b7a90; background: transparent; border: none;
-                font-size: 11px;
-            }
-            QPushButton:hover { color: #f87171; }
-        """)
+        close_btn = IconButton("mdi.close", tooltip="Quitar", size=22,
+                               variant="danger", hover_color=DANGER)
         close_btn.clicked.connect(lambda: self._remove_attachment(badge, filepath))
         h.addWidget(close_btn)
 
-        self.attachments_row.addWidget(badge)
+        self.attachments_row.insertWidget(self.attachments_row.count() - 1, badge)
 
     def _remove_attachment(self, badge, filepath):
         if filepath in self._attached_files:
             self._attached_files.remove(filepath)
         badge.deleteLater()
         if not self._attached_files:
-            self.attachments_container.setVisible(False)
+            self.attachments_scroll.setVisible(False)
 
     def _clear_attachments_ui(self):
-        while self.attachments_row.count():
+        while self.attachments_row.count() > 1:
             item = self.attachments_row.takeAt(0)
             widget = item.widget()
             if widget:
                 widget.deleteLater()
-        self.attachments_container.setVisible(False)
+        self.attachments_scroll.setVisible(False)
 
     def set_enabled(self, enabled: bool):
         self.input_field.setEnabled(enabled)

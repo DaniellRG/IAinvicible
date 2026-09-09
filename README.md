@@ -9,12 +9,26 @@ teclado.
 
 ---
 
+## Descarga directa (Windows, .exe)
+
+**Nada que instalar**: el ejecutable es autocontenido y funciona en
+Windows 10/11 tal cual, sin Python ni dependencias.
+
+- [Descargar notas.exe (ultima version)](https://github.com/DaniellRG/IAinvicible/releases/latest/download/notas.exe)
+
+> Se compila con `Compilar.bat` (PyInstaller, `--onefile`). El nombre "notas"
+> es deliberado para ser discreto en estaciones de trabajo.
+
+---
+
 ## Funcionalidades
 
 ### Modelos de IA
 - **Ollama local**: detecta modelos instalados automaticamente y chatea en streaming.
 - **Archivos GGUF locales**: busca modelos en tu PC (`.gguf`, `.bin`, `.safetensors`, ...)
-  y los carga con `llama-cpp-python`.
+  con escaneo **en paralelo**, opcion de **discos/USB** o toda la PC, resultados
+  **en vivo** con contador y boton **Detener**. Detecta tambien modelos de Ollama
+  dentro de carpetas `.ollama`. Carga con `llama-cpp-python`.
 - **Nube (OpenAI-compatible)**: GPT y cualquier API compatible (`/chat/completions`).
 - **Nube (Anthropic)**: modelos Claude via `/v1/messages`.
 
@@ -24,7 +38,15 @@ teclado.
 - Boton **Detener** / `Esc` para cancelar la generacion.
 - Adjuntar archivos (PDF, DOCX, texto, codigo, hojas...) y **imagenes** con preview.
 - Copiar respuestas de la IA con un clic.
+- Los bloques de **codigo se muestran en tarjetas propias** (aparte de la
+  explicacion) con etiqueta de lenguaje y boton **Copiar** por bloque.
 - **Exportar** la conversacion actual a **Markdown** (`F4`), guardada en `exports/`.
+
+### Prompts
+- Panel con **doble clic para activar/desactivar** un prompt (marcado en verde).
+- **Mas opciones**: renombrar, editar contenido, copiar al portapapeles y eliminar
+  (botones y menu contextual con clic derecho).
+- Pie de informacion del prompt seleccionado (caracteres, palabras y estado).
 
 ### Historial
 - Guardado automatico de conversaciones en `history/` (JSON).

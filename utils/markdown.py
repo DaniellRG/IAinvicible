@@ -25,6 +25,48 @@ def _extract_code_blocks(text: str):
     return work, placeholders
 
 
+def split_blocks(text: str):
+    """Divide el texto en bloques: ("text", contenido) o ("code", lang, contenido).
+
+    Los bloques de codigo van aparte del texto de explicacion.
+    Un par de ``` sin cerrar (respuesta en streaming) se convierte en
+    un bloque de codigo incompleto, en lugar de texto literal.
+    """
+    if not text:
+        return []
+    out = []
+    pos = 0
+    for m in re.finditer(r"```(\w*)\s*\n(.*?)```", text, flags=re.S):
+        if m.start() > pos:
+            _append_text(out, text[pos:m.start()])
+        lang = (m.group(1) or "").strip()
+        code = m.group(2)
+        if not out or out[-1][0] != "code" or out[-1][1] != lang:
+            out.append(("code", lang, code))
+        else:
+            out[-1] = ("code", lang, out[-1][2] + "\n" + code)
+        pos = m.end()
+    tail = text[pos:]
+    if tail.strip():
+        openm = re.search(r"([\s\S]*?)```(\w*)\s*\n([\s\S]*)\Z", tail)
+        if openm:
+            _append_text(out, openm.group(1))
+            out.append(("code", (openm.group(2) or "").strip(), openm.group(3)))
+        else:
+            _append_text(out, tail)
+    return out
+
+
+def _append_text(out, seg):
+    seg = seg.strip("\n")
+    if not seg.strip():
+        return
+    if out and out[-1][0] == "text":
+        out[-1] = ("text", out[-1][1] + seg)
+    else:
+        out.append(("text", seg))
+
+
 def _restore(work: str, placeholders: dict) -> str:
     for key, value in placeholders.items():
         work = work.replace(key, value)

@@ -382,7 +382,7 @@ QToolButton:hover {
     font-size: 11px;
 }
 #history_delete_btn:hover {
-    color: #f87171;
+    color: #c5cdd8;
     background-color: #1e2a3a;
 }
 
@@ -831,7 +831,7 @@ QToolButton:hover {
     font-size: 11px;
 }
 #history_delete_btn:hover {
-    color: #ef4444;
+    color: #1e293b;
     background-color: #f1f5f9;
 }
 
