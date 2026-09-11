@@ -56,7 +56,6 @@ Windows 10/11 tal cual, sin Python ni dependencias.
 ### Personalizacion
 - Tema claro/oscuro (`F9`).
 - Modo compacto (`F10`).
-- Modo "auto-hide": oculta la ventana tras 15 s sin uso (`F8`, **desactivado por defecto**).
 
 ### Atajos de teclado
 
@@ -67,7 +66,6 @@ Windows 10/11 tal cual, sin Python ni dependencias.
 | `F5` | Actualizar modelos |
 | `F6` | Configurar API Key |
 | `F7` | Nueva conversacion |
-| `F8` | Auto-hide on/off |
 | `F9` | Alternar tema claro/oscuro |
 | `F10` | Modo compacto |
 | `Esc` | Detener generacion |

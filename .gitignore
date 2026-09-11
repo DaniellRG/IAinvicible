@@ -2,6 +2,8 @@
 history/
 config.json
 error.log
+desktop.ini
+Thumbs.db
 
 # Modelos locales descargados (binarios grandes)
 models/

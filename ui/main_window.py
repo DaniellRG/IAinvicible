@@ -430,9 +430,6 @@ class MainWindow(QMainWindow):
         self._busy = False
         self._cancel_requested = False
         self._is_visible = True
-        self._auto_hide_enabled = False
-        self._auto_hide_seconds = 15
-        self._is_hidden_by_auto = False
         self._is_compact = False
         self._current_theme = "dark"
         self._current_conv_id = None
@@ -457,10 +454,6 @@ class MainWindow(QMainWindow):
 
         self.setStyleSheet(get_theme(self._current_theme))
 
-        self._auto_hide_timer = QTimer()
-        self._auto_hide_timer.setSingleShot(True)
-        self._auto_hide_timer.timeout.connect(self._auto_hide)
-
         self._stealth_timer = QTimer()
         self._stealth_timer.setInterval(1000)
         self._stealth_timer.timeout.connect(self._reassert_stealth)
@@ -468,7 +461,6 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._apply_anti_capture()
         self._register_hotkey()
-        self._start_auto_hide_timer()
         QTimer.singleShot(100, self._load_models)
         QTimer.singleShot(1200, self._maybe_preload_saved_gguf)
 
@@ -526,7 +518,7 @@ class MainWindow(QMainWindow):
             "Atajos:\n  Ctrl+Alt+Z  Mostrar/Ocultar ventana\n"
             "  F4  Exportar conversacion (.md)\n"
             "  F5  Actualizar modelos\n  F6  Configurar API Key\n"
-            "  F7  Nueva conversacion\n  F8  Auto-hide 15s on/off (off)\n"
+            "  F7  Nueva conversacion\n"
             "  F9  Alternar tema\n  F10 Modo compacto\n  Esc Detener generacion\n\n"
             "Proteccion siempre activa:\n"
             "  La ventana esta excluida de capturas/streamings mientras esta\n"
@@ -543,7 +535,7 @@ class MainWindow(QMainWindow):
         self._stealth_timer.start()
 
     def _reassert_stealth(self):
-        if not self._is_visible or self._is_hidden_by_auto:
+        if not self._is_visible:
             return
         try:
             hwnd = int(self.winId())
@@ -574,7 +566,6 @@ class MainWindow(QMainWindow):
             restore_capture(hwnd)
         self.hide()
         self._is_visible = False
-        self._auto_hide_timer.stop()
 
     def _show_window(self):
         hwnd = int(self.winId())
@@ -584,10 +575,8 @@ class MainWindow(QMainWindow):
         self.show()
         self._is_visible = True
         self.setWindowOpacity(1.0)
-        self._is_hidden_by_auto = False
         self.activateWindow()
         self.raise_()
-        self._start_auto_hide_timer()
         if hwnd:
             QTimer.singleShot(0, self._delayed_stealth_apply)
 
@@ -611,47 +600,10 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def _start_auto_hide_timer(self):
-        if self._auto_hide_enabled:
-            self._auto_hide_timer.start(self._auto_hide_seconds * 1000)
-
-    def _auto_hide(self):
-        if self._is_visible and self._auto_hide_enabled and not self._busy:
-            hwnd = int(self.winId())
-            if hwnd:
-                restore_capture(hwnd)
-            self.hide()
-            self._is_visible = False
-            self._is_hidden_by_auto = True
-            self._auto_hide_timer.stop()
-
     def _set_busy(self, busy: bool):
         self._busy = busy
 
-    def _reset_auto_hide(self):
-        if self._is_hidden_by_auto:
-            self._show_window()
-        else:
-            self._start_auto_hide_timer()
-
-    def mouseMoveEvent(self, event):
-        self._reset_auto_hide()
-        super().mouseMoveEvent(event)
-
-    def mousePressEvent(self, event):
-        self._reset_auto_hide()
-        super().mousePressEvent(event)
-
-    def enterEvent(self, event):
-        self._reset_auto_hide()
-        super().enterEvent(event)
-
-    def focusInEvent(self, event):
-        self._reset_auto_hide()
-        super().focusInEvent(event)
-
     def closeEvent(self, event):
-        self._auto_hide_timer.stop()
         self._stealth_timer.stop()
         self.model_selector.stop_timers()
         self._auto_save_conversation()
@@ -954,7 +906,6 @@ class MainWindow(QMainWindow):
         self.input_bar.show_stop(True)
         self.model_selector.set_status("loading")
         self.chat.start_ai_message()
-        self._auto_hide_timer.stop()
 
         self._ensure_gguf_loaded(lambda: self._start_ai_worker(text, files_content))
 
@@ -978,7 +929,6 @@ class MainWindow(QMainWindow):
             self.chat.add_message("[Generacion detenida]", is_user=False)
             self._cancel_requested = False
         self.input_bar.input_field.setFocus()
-        self._start_auto_hide_timer()
 
     def _on_response_error(self, error: str):
         self._mark_done()
@@ -1029,7 +979,6 @@ class MainWindow(QMainWindow):
         self.input_bar.show_stop(False)
 
     def keyPressEvent(self, event):
-        self._reset_auto_hide()
         if event.key() == Qt.Key.Key_F4:
             self._export_conversation()
         elif event.key() == Qt.Key.Key_F5:
@@ -1038,14 +987,6 @@ class MainWindow(QMainWindow):
             self._show_api_key_dialog()
         elif event.key() == Qt.Key.Key_F7:
             self._on_new_conversation()
-        elif event.key() == Qt.Key.Key_F8:
-            self._auto_hide_enabled = not self._auto_hide_enabled
-            if self._auto_hide_enabled:
-                self.chat.add_message("Auto-hide: ACTIVADO (se oculta en 15s)", is_user=False)
-                self._start_auto_hide_timer()
-            else:
-                self.chat.add_message("Auto-hide: DESACTIVADO", is_user=False)
-                self._auto_hide_timer.stop()
         elif event.key() == Qt.Key.Key_F9:
             self._toggle_theme()
         elif event.key() == Qt.Key.Key_F10:
