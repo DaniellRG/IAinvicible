@@ -298,6 +298,13 @@ class ModelSelector(QWidget):
 
         layout.addStretch()
 
+        self.provider_info = QLabel("")
+        self.provider_info.setObjectName("provider_info")
+        self.provider_info.setStyleSheet(
+            "color: #888; font-size: 11px; background: transparent; border: none;"
+        )
+        layout.addWidget(self.provider_info)
+
         self.ollama_btn = QPushButton("\U0001F999")
         self.ollama_btn.setObjectName("attach_btn")
         self.ollama_btn.setFixedSize(32, 32)
@@ -671,6 +678,16 @@ class ModelSelector(QWidget):
         data = self.model_combo.currentData()
         if data:
             provider, model = data
+            provider_names = {
+                "ollama": "Ollama",
+                "cloud": "Nube",
+                "local_file": "Archivo local"
+            }
+            pname = provider_names.get(provider, provider)
+            model_short = os.path.basename(model) if provider == "local_file" else model
+            if len(model_short) > 30:
+                model_short = model_short[:28] + "\u2026"
+            self.provider_info.setText(f"{pname} \u00b7 {model_short}")
             self.model_changed.emit(provider, model)
 
     def set_status(self, status: str):
@@ -690,13 +707,29 @@ class ModelSelector(QWidget):
             self._loading = False
             self._dot_timer.stop()
         if status == "ready":
-            self.status_label.setText("Listo")
+            self.status_label.setText("Conectado")
         elif status == "loading":
             self.status_label.setText("Cargando...")
         elif status == "error":
-            self.status_label.setText("Error")
+            self.status_label.setText("Error de conexion")
         else:
             self.status_label.setText("Sin modelo")
+
+        data = self.model_combo.currentData()
+        if data:
+            provider, model = data
+            provider_names = {
+                "ollama": "Ollama",
+                "cloud": "Nube",
+                "local_file": "Archivo local"
+            }
+            pname = provider_names.get(provider, provider)
+            model_short = os.path.basename(model) if provider == "local_file" else model
+            if len(model_short) > 30:
+                model_short = model_short[:28] + "\u2026"
+            self.provider_info.setText(f"{pname} \u00b7 {model_short}")
+        else:
+            self.provider_info.setText("")
 
     def _animate_loading(self):
         self._dot_count = (self._dot_count + 1) % 4
