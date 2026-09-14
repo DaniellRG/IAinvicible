@@ -175,7 +175,17 @@ class ApiKeyDialog(QDialog):
         self.provider_combo = QComboBox()
         for label, _, _, _ in self._PROVIDER_PRESETS:
             self.provider_combo.addItem(label)
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         layout.addWidget(self.provider_combo)
+
+        self.url_wrap = QVBoxLayout()
+        url_title = QLabel("URL base (ej: https://api.tuservicio.com/v1):")
+        url_title.setObjectName("url_title")
+        self.url_wrap.addWidget(url_title)
+        self.url_input = QLineEdit()
+        self.url_input.setPlaceholderText("https://...")
+        self.url_wrap.addWidget(self.url_input)
+        layout.addLayout(self.url_wrap)
 
         sep = QLabel("Keys guardadas:")
         sep.setStyleSheet("color: #6b7a90; font-size: 11px; margin-top: 6px;")
@@ -241,12 +251,27 @@ class ApiKeyDialog(QDialog):
         for idx, (_, ptype, _, _) in enumerate(self._PROVIDER_PRESETS):
             if ptype == provider_type:
                 self.provider_combo.setCurrentIndex(idx)
+                self._on_provider_changed(idx)
                 return
         self.provider_combo.setCurrentIndex(3)
+        self._on_provider_changed(3)
+
+    def _on_provider_changed(self, index: int):
+        is_custom = self._PROVIDER_PRESETS[index][1] == "openai_compatible"
+        for i in range(self.url_wrap.count()):
+            w = self.url_wrap.itemAt(i).widget()
+            if w:
+                w.setVisible(is_custom)
+        if is_custom and not self.url_input.text():
+            base = self._engine.config.get("cloud", {}).get("base_url", "")
+            if base:
+                self.url_input.setText(base)
 
     def _populate_from_saved(self, entry: dict):
         self._set_provider_by_type(entry.get("provider", "openai"))
         self.key_input.setText(entry.get("api_key", ""))
+        if entry.get("provider") == "openai_compatible":
+            self.url_input.setText(entry.get("base_url", ""))
 
     def _on_key_selection_changed(self, index: int):
         self.delete_key_btn.setEnabled(0 < index <= len(self._saved_keys))
@@ -299,6 +324,9 @@ class ApiKeyDialog(QDialog):
         if not api_key:
             QMessageBox.warning(self, "API Key", "Debes ingresar una API Key.")
             return
+
+        if provider_type == "openai_compatible":
+            base_url = self.url_input.text().strip()
 
         self._engine.set_cloud_provider(provider_type, base_url)
         self._engine.set_api_key(api_key)
@@ -575,6 +603,7 @@ class MainWindow(QMainWindow):
         self._gguf_pending = []
         self._gguf_send_queued = False
         self._gguf_token = 0
+        self._prefer_cloud = False
 
         ui_config = self.engine.config.get("ui", {})
         self._current_theme = ui_config.get("theme", "dark")
@@ -902,12 +931,13 @@ class MainWindow(QMainWindow):
             )
 
         if models.get("local") or models.get("cloud"):
-            if models.get("local"):
+            if models.get("local") and not self._prefer_cloud:
                 self.engine.set_model("ollama", models["local"][0]["name"])
                 self.model_selector.set_current_model("ollama", models["local"][0]["name"])
-            elif models.get("cloud"):
+            else:
                 self.engine.set_model("cloud", models["cloud"][0]["name"])
                 self.model_selector.set_current_model("cloud", models["cloud"][0]["name"])
+            self._prefer_cloud = False
             self.model_selector.set_status("ready")
         else:
             self.model_selector.set_status("off")
@@ -1020,7 +1050,8 @@ class MainWindow(QMainWindow):
     def _show_api_key_dialog(self):
         dialog = ApiKeyDialog(self.engine, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            QTimer.singleShot(200, self._check_model_ready)
+            self._prefer_cloud = True
+            self._load_models()
 
     def _on_send_message(self, text: str):
         if self._busy:
