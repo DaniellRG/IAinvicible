@@ -37,14 +37,27 @@ def is_connection_error(exc: Exception) -> bool:
     return isinstance(exc, _CONNECTION_ERRORS)
 
 
+def is_retriable_http_error(exc: Exception) -> bool:
+    """Errores HTTP transitorios del proveedor p. ej. 503 (saturacion).
+
+    429 se excluye: con planes gratuitos indica limite de cuota por minuto
+    y reintentar agota la cuota mas rapido sin dar exito inmediato.
+    """
+    return (
+        isinstance(exc, ProviderHTTPError)
+        and exc.status_code in (500, 502, 503)
+    )
+
+
 def with_retries(fn, retries: int = 2, delay: float = 1.0):
-    """Ejecuta fn() reintentando ante errores de conexion."""
+    """Ejecuta fn() reintentando ante errores de conexion y HTTP transitorios."""
     attempt = 0
     while True:
         try:
             return fn()
         except Exception as exc:
-            if not is_connection_error(exc) or attempt >= retries:
+            retriable = is_connection_error(exc) or is_retriable_http_error(exc)
+            if not retriable or attempt >= retries:
                 raise
             attempt += 1
             time.sleep(delay * attempt)

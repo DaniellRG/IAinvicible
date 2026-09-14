@@ -136,13 +136,14 @@ class CloudClient:
         def _request():
             self._client.timeout = httpx.Timeout(timeout)
             req = self._client.build_request("POST", url, json=payload, headers=self.headers)
-            return self._client.send(req, stream=stream)
+            resp = self._client.send(req, stream=stream)
+            if resp.status_code != 200:
+                error_body = resp.read().decode(errors="replace")
+                resp.close()
+                raise ProviderHTTPError(resp.status_code, error_body[:200])
+            return resp
 
-        resp = with_retries(_request)
-        if resp.status_code != 200:
-            error_body = resp.read().decode(errors="replace")
-            raise ProviderHTTPError(resp.status_code, error_body[:200])
-
+        resp = with_retries(_request, retries=2, delay=1.0)
         if not stream:
             data = resp.json()
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
