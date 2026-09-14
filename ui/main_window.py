@@ -930,6 +930,7 @@ class MainWindow(QMainWindow):
         self.model_worker.start()
 
     def _on_models_loaded(self, models: dict):
+        saved_cloud_model = self.engine.config.get("cloud", {}).get("model", "")
         self.model_selector.clear_models()
 
         for m in models.get("local", []):
@@ -947,8 +948,14 @@ class MainWindow(QMainWindow):
                 self.engine.set_model("ollama", models["local"][0]["name"])
                 self.model_selector.set_current_model("ollama", models["local"][0]["name"])
             else:
-                self.engine.set_model("cloud", models["cloud"][0]["name"])
-                self.model_selector.set_current_model("cloud", models["cloud"][0]["name"])
+                cloud_ids = [m["name"] for m in models.get("cloud", [])]
+                if saved_cloud_model in cloud_ids:
+                    target = saved_cloud_model
+                else:
+                    target = cloud_ids[0] if cloud_ids else ""
+                if target:
+                    self.engine.set_model("cloud", target)
+                    self.model_selector.set_current_model("cloud", target)
             self._prefer_cloud = False
             self.model_selector.set_status("ready")
         else:
