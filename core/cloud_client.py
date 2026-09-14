@@ -70,6 +70,24 @@ class CloudClient:
         except Exception:
             return False
 
+    def _is_chat_eligible(self, model_id: str) -> bool:
+        """True si el modelo sirve para chat de texto con esta cuenta.
+
+        Excluye modelos especializados (imagen, voz, audio, embeddings,
+        live, robótica, computer-use) y, para Gemini, los de la serie 2.5
+        que Google ya no habilita en cuentas nuevas (404).
+        """
+        mid = model_id.lower()
+        special = (
+            "-image", "-tts", "-transcribe", "-audio", "-embedding",
+            "-live", "-robotics", "-computer-use", "-customtools", "-preview",
+        )
+        if any(s in mid for s in special):
+            return False
+        if self.provider == "gemini" and "2.5" in mid:
+            return False
+        return True
+
     def list_models(self) -> list[dict]:
         if not self.api_key:
             return []
@@ -81,12 +99,13 @@ class CloudClient:
                 models = []
                 for m in data.get("data", []):
                     model_id = m.get("id", "")
-                    if any(x in model_id.lower() for x in [
+                    lowered = model_id.lower()
+                    if any(x in lowered for x in [
                         "gpt", "claude", "gemini", "o1", "o3", "mistral", "llama",
                         "deepseek", "qwen", "glm", "kimi", "minimax", "grok",
                         "big-pickle", "muse", "nemotron", "ling", "mimo",
                         "laguna", "north", "longcat", "phi", "command",
-                    ]):
+                    ]) and self._is_chat_eligible(model_id):
                         models.append({"id": model_id, "name": model_id})
                 return models
             return []
