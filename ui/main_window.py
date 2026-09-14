@@ -128,11 +128,14 @@ class GGUFLoadWorker(QThread):
 
 class ApiKeyDialog(QDialog):
     _PROVIDER_PRESETS = [
+        ("OpenCode", "openai", "https://opencode.ai/zen/v1", "big-pickle"),
         ("OpenAI", "openai", "https://api.openai.com/v1", "gpt-4o-mini"),
         ("OpenRouter", "openai", "https://openrouter.ai/api/v1", "openai/gpt-4o-mini"),
         ("Anthropic", "anthropic", "https://api.anthropic.com", "claude-3-5-sonnet-20241022"),
         ("Personalizado", "openai_compatible", "", ""),
     ]
+
+    _CUSTOM_INDEX = 4
 
     def __init__(self, engine, parent=None):
         super().__init__(parent)
@@ -253,7 +256,7 @@ class ApiKeyDialog(QDialog):
                 self.provider_combo.setCurrentIndex(idx)
                 self._on_provider_changed(idx)
                 return
-        self.provider_combo.setCurrentIndex(3)
+        self.provider_combo.setCurrentIndex(self._CUSTOM_INDEX)
         self._on_provider_changed(3)
 
     def _on_provider_changed(self, index: int):
@@ -309,16 +312,19 @@ class ApiKeyDialog(QDialog):
             self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
             self.toggle_btn.setText("Mostrar")
 
-    def _generate_name(self, provider_type: str) -> str:
+    def _generate_name(self, provider_type: str, preset_label: str = "") -> str:
         count = sum(1 for k in self._saved_keys if k.get("provider") == provider_type)
-        labels = {"openai": "OpenAI", "anthropic": "Anthropic", "openai_compatible": "Custom"}
-        base = labels.get(provider_type, provider_type.title())
+        if preset_label:
+            base = preset_label
+        else:
+            labels = {"openai": "OpenAI", "anthropic": "Anthropic", "openai_compatible": "Custom"}
+            base = labels.get(provider_type, provider_type.title())
         return f"{base} {count + 1}"
 
     def accept(self):
         idx = self.keys_combo.currentIndex()
         preset_idx = self.provider_combo.currentIndex()
-        _, provider_type, base_url, model = self._PROVIDER_PRESETS[preset_idx]
+        label, provider_type, base_url, model = self._PROVIDER_PRESETS[preset_idx]
         api_key = self.key_input.text().strip()
 
         if not api_key:
@@ -332,7 +338,7 @@ class ApiKeyDialog(QDialog):
         self._engine.set_api_key(api_key)
         self._engine.config["cloud"]["model"] = model
 
-        name = self._generate_name(provider_type)
+        name = self._generate_name(provider_type, label)
         entry = {
             "name": name,
             "provider": provider_type,

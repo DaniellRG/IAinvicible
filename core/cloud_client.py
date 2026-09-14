@@ -81,7 +81,12 @@ class CloudClient:
                 models = []
                 for m in data.get("data", []):
                     model_id = m.get("id", "")
-                    if any(x in model_id for x in ["gpt", "claude", "gemini", "o1", "o3", "mistral", "llama"]):
+                    if any(x in model_id.lower() for x in [
+                        "gpt", "claude", "gemini", "o1", "o3", "mistral", "llama",
+                        "deepseek", "qwen", "glm", "kimi", "minimax", "grok",
+                        "big-pickle", "muse", "nemotron", "ling", "mimo",
+                        "laguna", "north", "longcat", "phi", "command",
+                    ]):
                         models.append({"id": model_id, "name": model_id})
                 return models
             return []
