@@ -150,8 +150,8 @@ class CloudClient:
                 yield content
             return
 
-        with resp as r:
-            for line in r.iter_lines():
+        try:
+            for line in resp.iter_lines():
                 line = line.strip()
                 if not line or not line.startswith("data: "):
                     continue
@@ -166,6 +166,8 @@ class CloudClient:
                 content = delta.get("content", "")
                 if content:
                     yield content
+        finally:
+            resp.close()
 
     def _chat_anthropic(
         self,

@@ -134,7 +134,7 @@ class ApiKeyDialog(QDialog):
         ("OpenAI", "openai", "https://api.openai.com/v1", "gpt-4o-mini"),
         ("OpenRouter", "openai", "https://openrouter.ai/api/v1", "openai/gpt-4o-mini"),
         ("Anthropic", "anthropic", "https://api.anthropic.com", "claude-3-5-sonnet-20241022"),
-        ("Gemini", "gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.0-flash"),
+        ("Gemini", "gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "models/gemini-3.6-flash"),
         ("Personalizado", "openai_compatible", "", ""),
     ]
 
