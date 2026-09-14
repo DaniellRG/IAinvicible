@@ -10,7 +10,9 @@ import time
 import os
 import sys
 
-_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from utils.cleanup import get_app_dir
+
+_root = get_app_dir()
 if _root not in sys.path:
     sys.path.insert(0, _root)
 

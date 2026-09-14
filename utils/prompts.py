@@ -1,8 +1,8 @@
 import os
 
-PROMPTS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts"
-)
+from utils.cleanup import get_app_dir
+
+PROMPTS_DIR = os.path.join(get_app_dir(), "prompts")
 
 _EXTENSIONS = (".md", ".txt")
 

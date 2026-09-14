@@ -5,7 +5,9 @@ import ctypes.wintypes
 import json
 import time
 
-_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from utils.cleanup import get_app_dir
+
+_root = get_app_dir()
 if _root not in sys.path:
     sys.path.insert(0, _root)
 
@@ -335,7 +337,11 @@ class ApiKeyDialog(QDialog):
             base_url = self.url_input.text().strip()
 
         self._engine.set_cloud_provider(provider_type, base_url)
-        self._engine.set_api_key(api_key)
+        try:
+            self._engine.set_api_key(api_key)
+        except ValueError as e:
+            QMessageBox.warning(self, "API Key", str(e))
+            return
         self._engine.config["cloud"]["model"] = model
 
         name = self._generate_name(provider_type, label)
@@ -895,8 +901,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted and dialog.new_title:
             data["title"] = dialog.new_title
             filepath = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "history", f"{conv_id}.json"
+                get_app_dir(), "history", f"{conv_id}.json"
             )
             if os.path.exists(filepath):
                 with open(filepath, "w", encoding="utf-8") as f:

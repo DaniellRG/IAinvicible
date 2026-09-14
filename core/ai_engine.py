@@ -10,10 +10,11 @@ if _root not in sys.path:
 from .ollama_client import OllamaClient
 from .cloud_client import CloudClient
 from .local_gguf import LocalGGUFClient
+from utils.cleanup import get_app_dir
 from utils.prompts import read_prompt, prompt_exists
 
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
+CONFIG_PATH = os.path.join(get_app_dir(), "config.json")
 
 DEFAULT_CONFIG = {
     "cloud": {
@@ -100,9 +101,27 @@ class AIEngine:
             pass
 
     def set_api_key(self, key: str):
+        key = self._sanitize_api_key(key)
         self.config["cloud"]["api_key"] = key
         self.cloud.set_api_key(key)
         self.save_config()
+
+    @staticmethod
+    def _sanitize_api_key(key: str) -> str:
+        key = (key or "").strip()
+        try:
+            key.encode("ascii")
+        except UnicodeEncodeError:
+            raise ValueError(
+                "La API Key contiene caracteres no validos (solo ASCII). Revisa que no se "
+                "haya copiado un mensaje de error en lugar de la clave."
+            ) from None
+        if not key or any(ch.isspace() for ch in key):
+            raise ValueError(
+                "La API Key no es una clave valida. Revisa que no se haya copiado "
+                "un mensaje de error o un texto por accidente."
+            )
+        return key
 
     def set_cloud_provider(self, provider: str, base_url: str):
         self.config["cloud"]["provider"] = provider

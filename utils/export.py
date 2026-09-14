@@ -1,6 +1,8 @@
 import os
 from datetime import datetime
 
+from utils.cleanup import get_app_dir
+
 
 def conversation_to_markdown(messages: list[dict], title: str = "Conversacion") -> str:
     lines = [f"# {title}", ""]
@@ -19,8 +21,7 @@ def conversation_to_markdown(messages: list[dict], title: str = "Conversacion") 
 def save_conversation_markdown(messages: list[dict], title: str = "Conversacion",
                                folder: str = "") -> str:
     if not folder:
-        app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        exports_dir = os.path.join(app_dir, "exports")
+        exports_dir = os.path.join(get_app_dir(), "exports")
         folder = exports_dir
     os.makedirs(folder, exist_ok=True)
 

@@ -2,7 +2,9 @@ import json
 import os
 import time
 
-HISTORY_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "history")
+from utils.cleanup import get_app_dir
+
+HISTORY_DIR = os.path.join(get_app_dir(), "history")
 
 
 def _ensure_dir():
