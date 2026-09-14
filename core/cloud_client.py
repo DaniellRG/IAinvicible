@@ -74,10 +74,17 @@ class CloudClient:
         """True si el modelo sirve para chat de texto con esta cuenta.
 
         Excluye modelos especializados (imagen, voz, audio, embeddings,
-        live, robótica, computer-use) y, para Gemini, los de la serie 2.5
-        que Google ya no habilita en cuentas nuevas (404).
+        live, robótica, computer-use) y para Gemini solo deja los modelos
+        verificados que responden en cuentas nuevas del plan gratuito.
         """
         mid = model_id.lower()
+        if self.provider == "gemini":
+            _working_gemini = {
+                "flash-latest", "flash-lite-latest", "3.1-flash-lite",
+                "3.5-flash", "3.5-flash-lite", "3.6-flash",
+            }
+            suffix = mid.split("models/gemini-")[-1]
+            return suffix in _working_gemini
         special = (
             "-image", "-tts", "-transcribe", "-audio", "-embedding",
             "-live", "-robotics", "-computer-use", "-customtools", "-preview",
