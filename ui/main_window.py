@@ -127,56 +127,154 @@ class GGUFLoadWorker(QThread):
 
 
 class ApiKeyDialog(QDialog):
-    def __init__(self, current_key: str = "", parent=None):
+    _PROVIDER_PRESETS = [
+        ("OpenAI", "openai", "https://api.openai.com/v1", "gpt-4o-mini"),
+        ("OpenRouter", "openai", "https://openrouter.ai/api/v1", "openai/gpt-4o-mini"),
+        ("Anthropic", "anthropic", "https://api.anthropic.com", "claude-3-5-sonnet-20241022"),
+        ("Personalizado", "openai_compatible", "", ""),
+    ]
+
+    def __init__(self, engine, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Configurar API Key")
         self.setMinimumWidth(420)
+        self._engine = engine
+        cloud = engine.config.get("cloud", {})
+        self._saved_keys: list[dict] = list(cloud.get("saved_keys") or [])
+        self._active_key_name: str = cloud.get("active_key_name", "")
+        self._setup_ui()
+        self._load_current(cloud)
+
+    def _setup_ui(self):
         self.setStyleSheet("""
             QDialog { background-color: #1e1e1e; color: #d4d4d4; }
             QLabel { color: #d4d4d4; }
-            QLineEdit {
+            QLineEdit, QComboBox {
                 background-color: #3c3c3c; color: #d4d4d4;
                 border: 1px solid #555; border-radius: 4px;
                 padding: 8px; font-size: 12px;
             }
+            QComboBox::drop-down { subcontrol-origin: padding; width: 24px; }
+            QComboBox QAbstractItemView { background-color: #3c3c3c; color: #d4d4d4; }
             QPushButton {
-                background-color: #0078d4; color: white;
+                background-color: #555; color: #d4d4d4;
                 border: none; border-radius: 4px;
-                padding: 8px 16px; font-weight: bold;
+                padding: 8px 12px; font-weight: 600;
             }
-            QPushButton:hover { background-color: #1a8ae8; }
+            QPushButton:hover { background-color: #666; }
+            QPushButton#primary { background-color: #0078d4; color: white; }
+            QPushButton#primary:hover { background-color: #1a8ae8; }
+            QPushButton#danger { background-color: #991b1b; color: #fca5a5; }
+            QPushButton#danger:hover { background-color: #b91c1c; }
+            QPushButton#clear { background-color: transparent; color: #6b7a90; }
         """)
-
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
-        title = QLabel("Ingresa tu API Key de OpenAI:")
-        title.setStyleSheet("font-size: 14px; font-weight: bold;")
-        layout.addWidget(title)
+        layout.addWidget(QLabel("Proveedor:"))
+        self.provider_combo = QComboBox()
+        for label, _, _, _ in self._PROVIDER_PRESETS:
+            self.provider_combo.addItem(label)
+        layout.addWidget(self.provider_combo)
 
+        sep = QLabel("Keys guardadas:")
+        sep.setStyleSheet("color: #6b7a90; font-size: 11px; margin-top: 6px;")
+        layout.addWidget(sep)
+        keys_row = QHBoxLayout()
+        self.keys_combo = QComboBox()
+        self.keys_combo.currentIndexChanged.connect(self._on_key_selection_changed)
+        keys_row.addWidget(self.keys_combo, 1)
+        self.delete_key_btn = QPushButton("Eliminar")
+        self.delete_key_btn.setObjectName("danger")
+        self.delete_key_btn.setFixedWidth(80)
+        self.delete_key_btn.setEnabled(False)
+        self.delete_key_btn.clicked.connect(self._delete_selected_key)
+        keys_row.addWidget(self.delete_key_btn)
+        layout.addLayout(keys_row)
+
+        layout.addWidget(QLabel("API Key:"))
         self.key_input = QLineEdit()
-        self.key_input.setPlaceholderText("sk-...")
-        self.key_input.setText(current_key)
+        self.key_input.setPlaceholderText("sk-... / sk-ant-...")
         self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
         layout.addWidget(self.key_input)
 
         self.toggle_btn = QPushButton("Mostrar")
         self.toggle_btn.setFixedWidth(100)
+        self.toggle_btn.setObjectName("clear")
         self.toggle_btn.clicked.connect(self._toggle_visibility)
         layout.addWidget(self.toggle_btn)
 
         btn_row = QHBoxLayout()
-        cancel_btn = QPushButton("Cancelar")
-        cancel_btn.setStyleSheet("background-color: #555;")
-        cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(cancel_btn)
-
-        save_btn = QPushButton("Guardar")
-        save_btn.clicked.connect(self.accept)
-        btn_row.addWidget(save_btn)
+        cancel = QPushButton("Cancelar")
+        cancel.clicked.connect(self.reject)
+        btn_row.addWidget(cancel)
+        btn_row.addStretch()
+        save = QPushButton("Guardar y aplicar")
+        save.setObjectName("primary")
+        save.clicked.connect(self.accept)
+        btn_row.addWidget(save)
         layout.addLayout(btn_row)
 
-        self.api_key = current_key
+    def _load_current(self, cloud):
+        active_name = cloud.get("active_key_name", "")
+        active_provider = cloud.get("provider", "openai")
+        self.keys_combo.blockSignals(True)
+        self.keys_combo.addItem("(nueva key)")
+        for entry in self._saved_keys:
+            self.keys_combo.addItem(entry.get("name", "Sin nombre"))
+        if active_name:
+            idx = next((i + 1 for i, e in enumerate(self._saved_keys) if e.get("name") == active_name), 0)
+            self.keys_combo.setCurrentIndex(idx)
+            if idx > 0:
+                self._populate_from_saved(self._saved_keys[idx - 1])
+            else:
+                self._set_provider_by_type(active_provider)
+                self.key_input.setText(cloud.get("api_key", ""))
+        else:
+            self.keys_combo.setCurrentIndex(0)
+            self._set_provider_by_type(active_provider)
+            self.key_input.setText(cloud.get("api_key", ""))
+        self.keys_combo.blockSignals(False)
+        self.delete_key_btn.setEnabled(0 < self.keys_combo.currentIndex() <= len(self._saved_keys))
+
+    def _set_provider_by_type(self, provider_type: str):
+        for idx, (_, ptype, _, _) in enumerate(self._PROVIDER_PRESETS):
+            if ptype == provider_type:
+                self.provider_combo.setCurrentIndex(idx)
+                return
+        self.provider_combo.setCurrentIndex(3)
+
+    def _populate_from_saved(self, entry: dict):
+        self._set_provider_by_type(entry.get("provider", "openai"))
+        self.key_input.setText(entry.get("api_key", ""))
+
+    def _on_key_selection_changed(self, index: int):
+        self.delete_key_btn.setEnabled(0 < index <= len(self._saved_keys))
+        if index == 0:
+            cloud = self._engine.config.get("cloud", {})
+            self._set_provider_by_type(cloud.get("provider", "openai"))
+            self.key_input.setText(cloud.get("api_key", ""))
+        else:
+            self._populate_from_saved(self._saved_keys[index - 1])
+
+    def _delete_selected_key(self):
+        idx = self.keys_combo.currentIndex()
+        if idx <= 0 or idx > len(self._saved_keys):
+            return
+        name = self._saved_keys[idx - 1].get("name", "")
+        if QMessageBox.question(
+            self, "Eliminar key",
+            f"Eliminar \"{name}\" de las keys guardadas?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self._saved_keys.pop(idx - 1)
+        self.keys_combo.removeItem(idx)
+        self._engine.config["cloud"]["saved_keys"] = self._saved_keys
+        if self._active_key_name == name:
+            self._active_key_name = ""
+            self._engine.config["cloud"]["active_key_name"] = ""
+        self.keys_combo.setCurrentIndex(0)
 
     def _toggle_visibility(self):
         if self.key_input.echoMode() == QLineEdit.EchoMode.Password:
@@ -186,8 +284,47 @@ class ApiKeyDialog(QDialog):
             self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
             self.toggle_btn.setText("Mostrar")
 
+    def _generate_name(self, provider_type: str) -> str:
+        count = sum(1 for k in self._saved_keys if k.get("provider") == provider_type)
+        labels = {"openai": "OpenAI", "anthropic": "Anthropic", "openai_compatible": "Custom"}
+        base = labels.get(provider_type, provider_type.title())
+        return f"{base} {count + 1}"
+
     def accept(self):
-        self.api_key = self.key_input.text().strip()
+        idx = self.keys_combo.currentIndex()
+        preset_idx = self.provider_combo.currentIndex()
+        _, provider_type, base_url, model = self._PROVIDER_PRESETS[preset_idx]
+        api_key = self.key_input.text().strip()
+
+        if not api_key:
+            QMessageBox.warning(self, "API Key", "Debes ingresar una API Key.")
+            return
+
+        self._engine.set_cloud_provider(provider_type, base_url)
+        self._engine.set_api_key(api_key)
+        self._engine.config["cloud"]["model"] = model
+
+        name = self._generate_name(provider_type)
+        entry = {
+            "name": name,
+            "provider": provider_type,
+            "base_url": base_url,
+            "model": model,
+            "api_key": api_key,
+        }
+
+        if idx == 0:
+            self._saved_keys.append(entry)
+            self._active_key_name = name
+        else:
+            old_name = self._saved_keys[idx - 1].get("name", "")
+            self._saved_keys[idx - 1].update(entry)
+            self._saved_keys[idx - 1]["name"] = old_name
+            self._active_key_name = old_name
+
+        self._engine.config["cloud"]["saved_keys"] = self._saved_keys
+        self._engine.config["cloud"]["active_key_name"] = self._active_key_name
+        self._engine.save_config()
         super().accept()
 
 
@@ -881,10 +1018,8 @@ class MainWindow(QMainWindow):
                 self._show_api_key_dialog()
 
     def _show_api_key_dialog(self):
-        current_key = self.engine.config.get("cloud", {}).get("api_key", "")
-        dialog = ApiKeyDialog(current_key, self)
+        dialog = ApiKeyDialog(self.engine, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.engine.set_api_key(dialog.api_key)
             QTimer.singleShot(200, self._check_model_ready)
 
     def _on_send_message(self, text: str):
